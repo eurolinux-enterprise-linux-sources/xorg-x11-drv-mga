@@ -7,7 +7,7 @@
 Summary:   Xorg X11 mga video driver
 Name:      xorg-x11-drv-mga
 Version:   1.6.3
-Release:   5%{?dist}
+Release:   6%{?dist}
 URL:       http://www.x.org
 License: MIT
 Group:     User Interface/X Hardware Support
@@ -73,6 +73,9 @@ rm -rf $RPM_BUILD_ROOT
 %{_mandir}/man4/mga.4*
 
 %changelog
+* Wed Mar 04 2015 Adam Jackson <ajax@redhat.com> 1.6.3-6
+- When defaulting to 16bpp, don't override the config file
+
 * Mon Aug 25 2014 Adam Jackson <ajax@redhat.com> 1.6.3-5
 - Fix shadow framebuffer height
 
