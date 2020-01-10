@@ -1,0 +1,27 @@
+From 04432b9c1db255e8e3d39a924f8803f83c407acc Mon Sep 17 00:00:00 2001
+From: Adam Jackson <ajax@redhat.com>
+Date: Tue, 5 May 2015 11:05:44 -0400
+Subject: [PATCH] Enable write-combining on the framebuffer BAR
+
+Signed-off-by: Adam Jackson <ajax@redhat.com>
+---
+ src/mga_driver.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/mga_driver.c b/src/mga_driver.c
+index f0025b1..8a7186f 100644
+--- a/src/mga_driver.c
++++ b/src/mga_driver.c
+@@ -2594,7 +2594,8 @@ MGAMapMem(ScrnInfoPtr pScrn)
+ 	pciaddr_t fbsize = pMga->FbMapSize;
+ 	err = pci_device_map_range(dev,
+ 				   fbaddr, fbsize,
+-				   PCI_DEV_MAP_FLAG_WRITABLE,
++				   PCI_DEV_MAP_FLAG_WRITABLE |
++				   PCI_DEV_MAP_FLAG_WRITE_COMBINE,
+ 				   (void **)&pMga->FbBase);
+ 
+ 	if (err) {
+-- 
+2.5.0
+

@@ -7,7 +7,7 @@
 Summary:   Xorg X11 mga video driver
 Name:      xorg-x11-drv-mga
 Version:   1.6.3
-Release:   6%{?dist}
+Release:   9%{?dist}
 URL:       http://www.x.org
 License: MIT
 Group:     User Interface/X Hardware Support
@@ -25,6 +25,10 @@ Patch4: mga-1.6.1-no-rr13-panning.patch
 Patch5: mga-shadow.patch
 Patch6: mga-1.6.3-g200se-a-16bpp.patch
 Patch7: mga-1.6.3-shadow-height.patch
+Patch8: 0001-dri-Stop-uselessly-initializing-the-ValidateTree-hoo.patch
+Patch9: 0001-Enable-write-combining-on-the-framebuffer-BAR.patch
+Patch10: mga-1.6.3-g200ew3.patch
+Patch11: mga-1.6.3-g200e4.patch
 
 ExcludeArch: s390 s390x
 
@@ -47,6 +51,10 @@ X.Org X11 mga video driver.
 %patch5 -p1 -b .shadow
 %patch6 -p1 -b .16bpp
 %patch7 -p1 -b .height
+%patch8 -p1 -b .dri
+%patch9 -p1 -b .wc
+%patch10 -p1 -b .g200ew3
+%patch11 -p1 -b .g200e4
 
 %build
 autoreconf -f -v --install || exit 1
@@ -73,6 +81,15 @@ rm -rf $RPM_BUILD_ROOT
 %{_mandir}/man4/mga.4*
 
 %changelog
+* Wed Jan 20 2016 Adam Jackson <ajax@redhat.com> 1.6.3-9
+- Add support for G200EW3 and G200E4
+
+* Wed Nov 18 2015 Adam Jackson <ajax@redhat.com> 1.6.3-8
+- Enable write-combining on the framebuffer BAR
+
+* Wed Nov 11 2015 Adam Jackson <ajax@redhat.com> 1.6.3-7
+- Rebuild for server 1.17
+
 * Wed Mar 04 2015 Adam Jackson <ajax@redhat.com> 1.6.3-6
 - When defaulting to 16bpp, don't override the config file
 

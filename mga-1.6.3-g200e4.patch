@@ -1,0 +1,187 @@
+diff -up xf86-video-mga-1.6.3/src/mga_dacG.c.jx xf86-video-mga-1.6.3/src/mga_dacG.c
+--- xf86-video-mga-1.6.3/src/mga_dacG.c.jx	2016-01-20 10:49:43.208397261 -0500
++++ xf86-video-mga-1.6.3/src/mga_dacG.c	2016-01-20 10:51:42.363129160 -0500
+@@ -51,6 +51,75 @@ static void MGAGRestore(ScrnInfoPtr, vga
+ static Bool MGAGInit(ScrnInfoPtr, DisplayModePtr);
+ static Bool MGAG_i2cInit(ScrnInfoPtr pScrn);
+ 
++#define P_ARRAY_SIZE 9
++
++void
++MGAG200E4ComputePLLParam(long lFo, int *M, int *N, int *P)
++{
++    unsigned int ulComputedFo;
++    unsigned int ulFDelta;
++    unsigned int ulFPermitedDelta;
++    unsigned int ulFTmpDelta;
++    unsigned int ulVCOMax, ulVCOMin;
++    unsigned int ulTestP;
++    unsigned int ulTestM;
++    unsigned int ulTestN;
++    unsigned int ulFoInternal;
++    unsigned int ulPLLFreqRef;
++    unsigned int pulPValues[P_ARRAY_SIZE] = {16, 14, 12, 10, 8, 6, 4, 2, 1};
++    unsigned int i;
++    unsigned int ulVCO;
++    unsigned int ulFVV;
++
++    ulVCOMax        = 1600000;
++    ulVCOMin        = 800000;
++    ulPLLFreqRef    = 25000;
++
++    if(lFo < 25000)
++        lFo = 25000;
++
++    ulFoInternal = lFo * 2;
++
++    ulFDelta = 0xFFFFFFFF;
++    /* Permited delta is 0.5% as VESA Specification */
++    ulFPermitedDelta = ulFoInternal * 5 / 1000;  
++
++    for (i = 0 ; i < P_ARRAY_SIZE ; i++)
++    {
++        ulTestP = pulPValues[i];
++
++        if ((ulFoInternal * ulTestP) > ulVCOMax) continue;
++        if ((ulFoInternal * ulTestP) < ulVCOMin) continue;
++
++        for (ulTestN = 50; ulTestN <= 256; ulTestN++) {
++            for (ulTestM = 1; ulTestM <= 32; ulTestM++) {
++                ulComputedFo = (ulPLLFreqRef * ulTestN) / (ulTestM * ulTestP);
++                if (ulComputedFo > ulFoInternal)
++                    ulFTmpDelta = ulComputedFo - ulFoInternal;
++                else
++                    ulFTmpDelta = ulFoInternal - ulComputedFo;
++
++                if (ulFTmpDelta < ulFDelta) {
++                    ulFDelta = ulFTmpDelta;
++                    *M = ulTestM - 1;
++                    *N = ulTestN - 1;
++                    *P = ulTestP - 1;
++                }
++            }
++        }
++    }
++
++    ulVCO = ulPLLFreqRef * ulTestN / ulTestM;
++    ulFVV = (ulVCO - 800000) / 50000;
++
++    if (ulFVV > 15)
++        ulFVV = 15;
++
++    *P |= (ulFVV << 4);
++
++    *M |= 0x80;
++}
++
+ void
+ MGAG200SEComputePLLParam(long lFo, int *M, int *N, int *P)
+ {
+@@ -949,7 +1018,11 @@ MGAGSetPCLK( ScrnInfoPtr pScrn, long f_o
+ 	}
+ 
+ 	if (pMga->is_G200SE) {
+-	    MGAG200SEComputePLLParam(f_out, &m, &n, &p);
++            if (pMga->reg_1e24 >= 0x04) {
++                MGAG200E4ComputePLLParam(f_out, &m, &n, &p);
++            } else {
++	        MGAG200SEComputePLLParam(f_out, &m, &n, &p);
++            }
+ 
+ 	    pReg->DacRegs[ MGA1064_PIX_PLLC_M ] = m;
+ 	    pReg->DacRegs[ MGA1064_PIX_PLLC_N ] = n;
+diff -up xf86-video-mga-1.6.3/src/mga_driver.c.jx xf86-video-mga-1.6.3/src/mga_driver.c
+--- xf86-video-mga-1.6.3/src/mga_driver.c.jx	2016-01-20 10:49:43.209397267 -0500
++++ xf86-video-mga-1.6.3/src/mga_driver.c	2016-01-20 10:53:57.012956228 -0500
+@@ -1775,24 +1775,6 @@ MGAPreInit(ScrnInfoPtr pScrn, int flags)
+     }
+ #endif
+ 
+-    /*
+-     * The first thing we should figure out is the depth, bpp, etc.
+-     * Our default depth is 8, so pass it to the helper function.
+-     * We support both 24bpp and 32bpp layouts, so indicate that.
+-     */
+-
+-    /* Prefer 32bpp */
+-    flags24 = Support24bppFb | Support32bppFb;
+-
+-    /* Prefer 24bpp on the bandwidth-poor SE-A, sigh */
+-    if (pMga->Chipset == PCI_CHIP_MGAG200_SE_A_PCI)
+-	flags24 |= SupportConvert32to24 | PreferConvert32to24;
+-    else
+-	flags24 |= PreferConvert24to32;
+-
+-    if (pMga->SecondCrtc)
+-	flags24 = Support32bppFb;
+-
+     if (xf86ReturnOptValBool(pMga->Options, OPTION_FBDEV, FALSE)) {
+ 	pMga->FBDev = TRUE;
+ 	xf86DrvMsg(pScrn->scrnIndex, X_CONFIG,
+@@ -1818,9 +1800,29 @@ MGAPreInit(ScrnInfoPtr pScrn, int flags)
+ 	pScrn->videoRam = MGACountRam(pScrn);
+     }
+ 
+-    if ((pMga->is_G200SE && pScrn->videoRam < 2048 ||
+-	 pMga->Chipset == PCI_CHIP_MGAG200_SE_A_PCI) &&
+-        pScrn->confScreen->defaultdepth == 0)
++    /*
++     * The first thing we should figure out is the depth, bpp, etc.
++     * Our default depth is 8, so pass it to the helper function.
++     * We support both 24bpp and 32bpp layouts, so indicate that.
++     */
++
++    /* Prefer 32bpp */
++    flags24 = Support24bppFb | Support32bppFb;
++
++    /* Prefer 24bpp on the bandwidth-poor SE-A, sigh */
++    if ((pMga->Chipset == PCI_CHIP_MGAG200_SE_A_PCI) &&
++        (pMga->reg_1e24 <= 0x02))
++	flags24 |= SupportConvert32to24 | PreferConvert32to24;
++    else
++	flags24 |= PreferConvert24to32;
++
++    if (pMga->SecondCrtc)
++	flags24 = Support32bppFb;
++
++    if (pScrn->confScreen->defaultdepth == 0 &&
++	((pMga->is_G200SE && pScrn->videoRam < 2048) ||
++	 (pMga->Chipset == PCI_CHIP_MGAG200_SE_A_PCI &&
++          pMga->reg_1e24 <= 0x02)))
+ 	pScrn->confScreen->defaultdepth = 16;
+ 
+     if (!xf86SetDepthBpp(pScrn, 0, 0, 0, flags24)) {
+@@ -4006,7 +4008,7 @@ mga_valid_mode(ScrnInfoPtr pScrn, Displa
+ 	        if (xf86ModeBandwidth(mode, pScrn->bitsPerPixel) > 244)
+ 	            return MODE_BANDWIDTH;
+         } else {
+-            if (pMga->reg_1e24 >= 0x02) {
++            if (pMga->reg_1e24 == 0x02) {
+ 	            if (mode->HDisplay > 1920)
+ 	                return MODE_VIRTUAL_X;
+ 	            if (mode->VDisplay > 1200)
+diff -up xf86-video-mga-1.6.3/src/mga_g_crtc.c.jx xf86-video-mga-1.6.3/src/mga_g_crtc.c
+--- xf86-video-mga-1.6.3/src/mga_g_crtc.c.jx	2016-01-20 10:49:43.209397267 -0500
++++ xf86-video-mga-1.6.3/src/mga_g_crtc.c	2016-01-20 10:51:42.364129166 -0500
+@@ -523,7 +523,11 @@ MGAGSetPCLK(xf86CrtcPtr crtc, MgaCrtcSta
+     }
+ 
+     if (pMga->is_G200SE) {
+-        MGAG200SEComputePLLParam(f_out, &m, &n, &p);
++        if (pMga->reg_1e24 >= 0x04) {
++            MGAG200E4ComputePLLParam(f_out, &m, &n, &p);
++        } else {
++	    MGAG200SEComputePLLParam(f_out, &m, &n, &p);
++        }
+ 	/* the asymmetry here bugs me */
+ 	state->DacRegs[MGA1064_PIX_PLLC_M] = m;
+ 	state->DacRegs[MGA1064_PIX_PLLC_N] = n;
+diff -up xf86-video-mga-1.6.3/src/mga_randr.h.jx xf86-video-mga-1.6.3/src/mga_randr.h
+--- xf86-video-mga-1.6.3/src/mga_randr.h.jx	2016-01-20 11:07:08.000000000 -0500
++++ xf86-video-mga-1.6.3/src/mga_randr.h	2016-01-20 11:07:19.466152051 -0500
+@@ -43,4 +43,5 @@ extern void MGAG200WBComputePLLParam(lon
+ extern void MGAG200EW3ComputePLLParam(long lFo, int *M, int *N, int *P);
+ extern void MGAG200EHComputePLLParam(long lFo, int *M, int *N, int *P);
+ extern void MGAG200ERComputePLLParam(long lFo, int *M, int *N, int *P);
++extern void MGAG200E4ComputePLLParam(long lFo, int *M, int *N, int *P);
+ #endif
