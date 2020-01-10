@@ -7,7 +7,7 @@
 Summary:   Xorg X11 mga video driver
 Name:      xorg-x11-drv-mga
 Version:   1.6.3
-Release:   11%{?dist}
+Release:   12%{?dist}
 URL:       http://www.x.org
 License: MIT
 Group:     User Interface/X Hardware Support
@@ -31,6 +31,7 @@ Patch10: mga-1.6.3-g200ew3.patch
 Patch11: mga-1.6.3-g200e4.patch
 Patch12: mga-1.6.3-ddc-randr12.patch
 Patch13: mga-1.6.3-g200eh3.patch
+Patch14: RHEL-xf86-video-mga-Fix-to-always-set-HiPri-for-G200e4-V2.patch
 ExcludeArch: s390 s390x
 
 BuildRequires: autoconf automake libtool
@@ -58,6 +59,7 @@ X.Org X11 mga video driver.
 %patch11 -p1 -b .g200e4
 %patch12 -p1 -b .fallddc
 %patch13 -p1 -b .g200eh3
+%patch14 -p1 -b .e4-hipri
 
 %build
 autoreconf -f -v --install || exit 1
@@ -84,6 +86,9 @@ rm -rf $RPM_BUILD_ROOT
 %{_mandir}/man4/mga.4*
 
 %changelog
+* Mon Jan 22 2018 Adam Jackson <ajax@redhat.com> - 1.6.3-12
+- Fix display freezes at low resolution on G200e4
+
 * Thu Feb 02 2017 Adam Jackson <ajax@redhat.com> - 1.6.3-11
 - Add support for G200EH3
 
