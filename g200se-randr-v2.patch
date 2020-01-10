@@ -1,0 +1,3469 @@
+diff --git a/src/Makefile.am b/src/Makefile.am
+index 20fbdf6..b6c84aa 100644
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -40,14 +40,16 @@ mga_drv_la_SOURCES = \
+          mga_dh.c \
+          mga_driver.c \
+          mga_g450pll.c \
++	 mga_g_crtc.c \
++	 mga_g_output.c \
+          mga.h \
+-         mga_halmod.c \
+          mga_hwcurs.c \
+          mga_macros.h \
+          mga_maven.h \
+          mga_merge.c \
+          mga_merge.h \
+          mgareg_flags.h \
++	 mga_randr.h \
+          mga_reg.h \
+          mga_sarea.h \
+          mga_shadow.c \
+diff --git a/src/mga.h b/src/mga.h
+index 988ba93..87fe1d0 100644
+--- a/src/mga.h
++++ b/src/mga.h
+@@ -66,7 +66,6 @@ typedef enum {
+     OPTION_SET_MCLK,
+     OPTION_OVERCLOCK_MEM,
+     OPTION_VIDEO_KEY,
+-    OPTION_ROTATE,
+     OPTION_TEXTURED_VIDEO,
+     OPTION_CRTC2HALF,
+     OPTION_CRTC2RAM,
+@@ -90,7 +89,8 @@ typedef enum {
+     OPTION_OLDDMA,
+     OPTION_PCIDMA,
+     OPTION_ACCELMETHOD,
+-    OPTION_KVM
++    OPTION_KVM,
++    OPTION_RANDR12,
+ } MGAOpts;
+ 
+ 
+@@ -218,6 +218,7 @@ typedef struct {
+     CARD32		Option2;
+     CARD32		Option3;
+     long                Clock;
++    unsigned char	Pan_Ctl;
+     Bool                PIXPLLCSaved;
+     unsigned char       PllM;
+     unsigned char       PllN;
+@@ -313,18 +314,6 @@ typedef struct {
+ #define ISTV1(p) (p->pMgaHwInfo && ((p->pMgaHwInfo->ulCapsFirstOutput) & MGAHWINFOCAPS_OUTPUT_TV))
+ #define ISTV2(p) (p->pMgaHwInfo && ((p->pMgaHwInfo->ulCapsSecondOutput) & MGAHWINFOCAPS_OUTPUT_TV))
+ 
+-#ifdef DISABLE_VGA_IO
+-typedef struct mgaSave {
+-#ifdef XSERVER_LIBPCIACCESS
+-    struct pci_device * pvp;
+-#else
+-    pciVideoPtr pvp;
+-#endif
+-    Bool enable;
+-} MgaSave, *MgaSavePtr;
+-#endif
+-
+-
+ typedef enum {
+     mgaLeftOf,
+     mgaRightOf,
+@@ -448,8 +437,6 @@ struct mga_device_attributes {
+     unsigned dri_capable:1;
+     unsigned dri_chipset:3;
+     
+-    unsigned HAL_chipset:1;
+-
+     enum {
+ 	old_BARs = 0,
+ 	probe_BARs,
+@@ -494,7 +481,6 @@ typedef struct {
+ 
+     Bool		Primary;
+     Bool		Interleave;
+-    int			HwBpp;
+     int			Roundings[4];
+     int			BppShifts[4];
+     Bool		HasFBitBlt;
+@@ -581,8 +567,6 @@ typedef struct {
+     void		(*PointerMoved)(SCRN_ARG_TYPE arg, int x, int y);
+     CloseScreenProcPtr	CloseScreen;
+     ScreenBlockHandlerProcPtr BlockHandler;
+-    unsigned int	(*ddc1Read)(ScrnInfoPtr);
+-    void (*DDC1SetSpeed)(ScrnInfoPtr, xf86ddcSpeed);
+     Bool		(*i2cInit)(ScrnInfoPtr);
+     I2CBusPtr		DDC_Bus1;
+     I2CBusPtr		DDC_Bus2;
+@@ -595,7 +579,6 @@ typedef struct {
+     int			colorKey;
+     int			videoKey;
+     int			fifoCount;
+-    int			Rotate;
+     MGAFBLayout		CurrentLayout;
+     Bool		DrawTransparent;
+     int			MaxBlitDWORDS;
+@@ -617,8 +600,6 @@ typedef struct {
+     MGAConfigPrivPtr 	pVisualConfigsPriv;
+     MGADRIServerPrivatePtr DRIServerInfo;
+ 
+-    MGARegRec		DRContextRegs;
+-
+     Bool		haveQuiescense;
+     void		(*GetQuiescence)(ScrnInfoPtr pScrn);
+ 
+@@ -681,7 +662,7 @@ typedef struct {
+     ScrnInfoPtr       pScrn2; /*pointer to second CRTC screeninforec,
+                                        if in merged mode */
+ /* End of Merged Framebuffer Data */
+-  int			HALGranularityOffX, HALGranularityOffY;
++    Bool		randr12;
+ } MGARec, *MGAPtr;
+ 
+ extern CARD32 MGAAtype[16];
+@@ -726,8 +707,6 @@ void MGAAdjustFrameCrtc2(ADJUST_FRAME_ARGS_DECL);
+ void MGADisplayPowerManagementSetCrtc2(ScrnInfoPtr pScrn,
+ 					     int PowerManagementMode,
+ 					     int flags);
+-void MGAAdjustGranularity(ScrnInfoPtr pScrn, int* x, int* y); 
+-
+ 
+ void MGA2064SetupFuncs(ScrnInfoPtr pScrn);
+ void MGAGSetupFuncs(ScrnInfoPtr pScrn);
+@@ -751,10 +730,6 @@ void MGAPolyArcThinSolid(DrawablePtr, GCPtr, int, xArc*);
+ Bool MGADGAInit(ScreenPtr pScreen);
+ 
+ void MGARefreshArea(ScrnInfoPtr pScrn, int num, BoxPtr pbox);
+-void MGARefreshArea8(ScrnInfoPtr pScrn, int num, BoxPtr pbox);
+-void MGARefreshArea16(ScrnInfoPtr pScrn, int num, BoxPtr pbox);
+-void MGARefreshArea24(ScrnInfoPtr pScrn, int num, BoxPtr pbox);
+-void MGARefreshArea32(ScrnInfoPtr pScrn, int num, BoxPtr pbox);
+ 
+ void mgaDoSetupForScreenToScreenCopy( ScrnInfoPtr pScrn, int xdir,
+     int ydir, int rop, unsigned int planemask, int trans, unsigned int bpp );
+@@ -842,4 +817,7 @@ MGA_SYNC(MGAPtr pMga, ScrnInfoPtr pScrn)
+ #endif
+ }
+ 
++ModeStatus
++mga_valid_mode(ScrnInfoPtr pScrn, DisplayModePtr mode, int flags);
++
+ #endif
+diff --git a/src/mga_dac3026.c b/src/mga_dac3026.c
+index 97c2c7a..82d9aa5 100644
+--- a/src/mga_dac3026.c
++++ b/src/mga_dac3026.c
+@@ -956,22 +956,6 @@ MGA3026UseHWCursor(ScreenPtr pScrn, CursorPtr pCurs)
+ static const int DDC_SDA_MASK = 1 << 2;
+ static const int DDC_SCL_MASK = 1 << 4;
+ 
+-static unsigned int
+-MGA3026_ddc1Read(ScrnInfoPtr pScrn)
+-{
+-  MGAPtr pMga = MGAPTR(pScrn);
+-
+-  /* Define the SDA as an input */
+-  outTi3026(TVP3026_GEN_IO_CTL, 0xfb, 0);
+-
+-  /* wait for Vsync */
+-  while( INREG( MGAREG_Status ) & 0x08 );
+-  while( ! (INREG( MGAREG_Status ) & 0x08) );
+-
+-  /* Get the result */
+-  return (inTi3026(TVP3026_GEN_IO_DATA) & DDC_SDA_MASK) >> 2 ;
+-}
+-
+ static void
+ MGA3026_I2CGetBits(I2CBusPtr b, int *clock, int *data) 
+ {
+@@ -1181,8 +1165,5 @@ void MGA2064SetupFuncs(ScrnInfoPtr pScrn)
+     pMga->Save = MGA3026Save;
+     pMga->Restore = MGA3026Restore;
+     pMga->ModeInit = MGA3026Init;
+-    pMga->ddc1Read = MGA3026_ddc1Read;
+-    /* vgaHWddc1SetSpeed will only work if the card is in VGA mode */
+-    pMga->DDC1SetSpeed = vgaHWddc1SetSpeedWeak();
+     pMga->i2cInit = MGA3026_i2cInit;
+ }
+diff --git a/src/mga_dacG.c b/src/mga_dacG.c
+index 9a80193..ce612c8 100644
+--- a/src/mga_dacG.c
++++ b/src/mga_dacG.c
+@@ -19,6 +19,7 @@
+ #include "mga.h"
+ #include "mga_macros.h"
+ #include "mga_maven.h"
++#include "mga_randr.h"
+ 
+ #include "xf86DDC.h"
+ 
+@@ -48,11 +49,10 @@ static void MGAGRamdacInit(ScrnInfoPtr);
+ static void MGAGSave(ScrnInfoPtr, vgaRegPtr, MGARegPtr, Bool);
+ static void MGAGRestore(ScrnInfoPtr, vgaRegPtr, MGARegPtr, Bool);
+ static Bool MGAGInit(ScrnInfoPtr, DisplayModePtr);
+-static void MGAGLoadPalette(ScrnInfoPtr, int, int*, LOCO*, VisualPtr);
+ static Bool MGAG_i2cInit(ScrnInfoPtr pScrn);
+ 
+-static void
+-MGAG200SEComputePLLParam(ScrnInfoPtr pScrn, long lFo, int *M, int *N, int *P)
++void
++MGAG200SEComputePLLParam(long lFo, int *M, int *N, int *P)
+ {
+     unsigned int ulComputedFo;
+     unsigned int ulFDelta;
+@@ -96,8 +96,8 @@ MGAG200SEComputePLLParam(ScrnInfoPtr pScrn, long lFo, int *M, int *N, int *P)
+     }
+ }
+ 
+-static void
+-MGAG200EVComputePLLParam(ScrnInfoPtr pScrn, long lFo, int *M, int *N, int *P)
++void
++MGAG200EVComputePLLParam(long lFo, int *M, int *N, int *P)
+ {
+     unsigned int ulComputedFo;
+     unsigned int ulFDelta;
+@@ -140,15 +140,10 @@ MGAG200EVComputePLLParam(ScrnInfoPtr pScrn, long lFo, int *M, int *N, int *P)
+ 	    }
+ 	}
+     }
+-#if DEBUG
+-	xf86DrvMsg(pScrn->scrnIndex, X_INFO,
+-		   "lFo=%ld n=0x%x m=0x%x p=0x%x \n",
+-		   lFo, *N, *M, *P );
+-#endif
+ }
+ 
+-static void
+-MGAG200WBComputePLLParam(ScrnInfoPtr pScrn, long lFo, int *M, int *N, int *P)
++void
++MGAG200WBComputePLLParam(long lFo, int *M, int *N, int *P)
+ {
+     unsigned int ulComputedFo;
+     unsigned int ulFDelta;
+@@ -200,15 +195,10 @@ MGAG200WBComputePLLParam(ScrnInfoPtr pScrn, long lFo, int *M, int *N, int *P)
+ 	    }
+ 	}
+     }
+-#if DEBUG
+-	xf86DrvMsg(pScrn->scrnIndex, X_INFO,
+-		   "lFo=%ld n=0x%x m=0x%x p=0x%x \n",
+-		   lFo, *N, *M, *P );
+-#endif
+ }
+ 
+-static void
+-MGAG200EHComputePLLParam(ScrnInfoPtr pScrn, long lFo, int *M, int *N, int *P)
++void
++MGAG200EHComputePLLParam(long lFo, int *M, int *N, int *P)
+ {
+     unsigned int ulComputedFo;
+     unsigned int ulFDelta;
+@@ -445,7 +435,8 @@ MGAG200WBPIXPLLSET(ScrnInfoPtr pScrn, MGARegPtr mgaReg)
+ #define G200ER_VCOMIN 1056000
+ #define G200ER_VCOMAX 1488000
+ 
+-static void MGAG200ERComputePLLParam(ScrnInfoPtr pScrn, long lFo, int *piM, int *piN, int *piP)
++void
++MGAG200ERComputePLLParam(long lFo, int *piM, int *piN, int *piP)
+ {
+ 
+     int  ulM;
+@@ -849,35 +840,72 @@ MGAGSetPCLK( ScrnInfoPtr pScrn, long f_out )
+ 
+ 	if(MGAISGx50(pMga)) {
+ 	    pReg->Clock = f_out;
++	    if (pMga->Chipset == PCI_CHIP_MGAG550) {
++		if (f_out < 45000) {
++		    pReg->Pan_Ctl = 0x00;
++		} else if (f_out < 55000) {
++		    pReg->Pan_Ctl = 0x08;
++		} else if (f_out < 70000) {
++		    pReg->Pan_Ctl = 0x10;
++		} else if (f_out < 85000) {
++		    pReg->Pan_Ctl = 0x18;
++		} else if (f_out < 100000) {
++		    pReg->Pan_Ctl = 0x20;
++		} else if (f_out < 115000) {
++		    pReg->Pan_Ctl = 0x28;
++		} else if (f_out < 125000) {
++		    pReg->Pan_Ctl = 0x30;
++		} else {
++		    pReg->Pan_Ctl = 0x38;
++		}
++	    } else {
++		if (f_out < 45000) {
++		    pReg->Pan_Ctl = 0x00;
++		} else if (f_out < 65000) {
++		    pReg->Pan_Ctl = 0x08;
++		} else if (f_out < 85000) {
++		    pReg->Pan_Ctl = 0x10;
++		} else if (f_out < 105000) {
++		    pReg->Pan_Ctl = 0x18;
++		} else if (f_out < 135000) {
++		    pReg->Pan_Ctl = 0x20;
++		} else if (f_out < 160000) {
++		    pReg->Pan_Ctl = 0x28;
++		} else if (f_out < 175000) {
++		    pReg->Pan_Ctl = 0x30;
++		} else {
++		    pReg->Pan_Ctl = 0x38;
++		}
++	    }
+ 	    return;
+ 	}
+ 
+ 	if (pMga->is_G200SE) {
+-	    MGAG200SEComputePLLParam(pScrn, f_out, &m, &n, &p);
++	    MGAG200SEComputePLLParam(f_out, &m, &n, &p);
+ 
+ 	    pReg->DacRegs[ MGA1064_PIX_PLLC_M ] = m;
+ 	    pReg->DacRegs[ MGA1064_PIX_PLLC_N ] = n;
+ 	    pReg->DacRegs[ MGA1064_PIX_PLLC_P ] = p;
+ 	} else if (pMga->is_G200EV) {
+-	    MGAG200EVComputePLLParam(pScrn, f_out, &m, &n, &p);
++	    MGAG200EVComputePLLParam(f_out, &m, &n, &p);
+ 
+ 	    pReg->PllM = m;
+ 	    pReg->PllN = n;
+ 	    pReg->PllP = p;
+ 	} else if (pMga->is_G200WB) {
+-	    MGAG200WBComputePLLParam(pScrn, f_out, &m, &n, &p);
++	    MGAG200WBComputePLLParam(f_out, &m, &n, &p);
+ 
+ 	    pReg->PllM = m;
+ 	    pReg->PllN = n;
+ 	    pReg->PllP = p;
+-    } else if (pMga->is_G200EH) {
+-	    MGAG200EHComputePLLParam(pScrn, f_out, &m, &n, &p);
++	} else if (pMga->is_G200EH) {
++	    MGAG200EHComputePLLParam(f_out, &m, &n, &p);
+ 
+ 	    pReg->PllM = m;
+ 	    pReg->PllN = n;
+ 	    pReg->PllP = p;		
+ 	} else if (pMga->is_G200ER) {
+-	    MGAG200ERComputePLLParam(pScrn, f_out, &m, &n, &p);
++	    MGAG200ERComputePLLParam(f_out, &m, &n, &p);
+ 	    pReg->PllM = m;
+ 	    pReg->PllN = n;
+ 	    pReg->PllP = p;		
+@@ -1338,7 +1366,7 @@ void MGAGLoadPalette(
+  * MGAGRestorePalette
+  */
+ 
+-static void
++void
+ MGAGRestorePalette(ScrnInfoPtr pScrn, unsigned char* pntr)
+ {
+     MGAPtr pMga = MGAPTR(pScrn);
+@@ -1352,7 +1380,7 @@ MGAGRestorePalette(ScrnInfoPtr pScrn, unsigned char* pntr)
+ /*
+  * MGAGSavePalette
+  */
+-static void
++void
+ MGAGSavePalette(ScrnInfoPtr pScrn, unsigned char* pntr)
+ {
+     MGAPtr pMga = MGAPTR(pScrn);
+@@ -1395,6 +1423,7 @@ MGA_NOT_HAL(
+ 	     * To test this we check for Clock == 0.
+ 	     */
+ 	    MGAG450SetPLLFreq(pScrn, mgaReg->Clock);
++	    outMGAdac(MGA1064_PAN_CTL, mgaReg->Pan_Ctl);
+ 	    mgaReg->PIXPLLCSaved = FALSE;
+ 	}
+ 
+@@ -1583,6 +1612,7 @@ MGAGSave(ScrnInfoPtr pScrn, vgaRegPtr vgaReg, MGARegPtr mgaReg,
+ 	 * VESA modes (s.o.). MATROX: hint, hint.
+ 	 */
+ 	if (MGAISGx50(pMga)) {
++	    mgaReg->Pan_Ctl = inMGAdac(MGA1064_PAN_CTL);
+ 	    mgaReg->Clock = MGAG450SavePLLFreq(pScrn);
+ 	}
+ 
+@@ -1831,39 +1861,6 @@ static const struct mgag_i2c_private {
+     { (1 << 1), (1 << 0) },  /* G200EH, G200ER I2C bits */
+ };
+ 
+-
+-static unsigned int
+-MGAG_ddc1Read(ScrnInfoPtr pScrn)
+-{
+-  MGAPtr pMga = MGAPTR(pScrn);
+-  unsigned char val;
+-  int i2c_index;
+-
+-  if (pMga->is_G200SE || pMga->is_G200WB || pMga->is_G200EV)
+-    i2c_index = 3;
+-  else if (pMga->is_G200EH || pMga->is_G200ER)
+-    i2c_index = 4;
+-  else
+-    i2c_index = 0;
+-
+-  const struct mgag_i2c_private *p = & i2c_priv[i2c_index];
+- 
+-  /* Define the SDA as an input */
+-  outMGAdacmsk(MGA1064_GEN_IO_CTL, ~(p->scl_mask | p->sda_mask), 0);
+-
+-  /* wait for Vsync */
+-  if (pMga->is_G200SE) {
+-    usleep(4);
+-  } else {
+-    while( INREG( MGAREG_Status ) & 0x08 );
+-    while( ! (INREG( MGAREG_Status ) & 0x08) );
+-  }
+-
+-  /* Get the result */
+-  val = (inMGAdac(MGA1064_GEN_IO_DATA) & p->sda_mask);
+-  return val;
+-}
+-
+ static void
+ MGAG_I2CGetBits(I2CBusPtr b, int *clock, int *data)
+ {
+@@ -1915,12 +1912,12 @@ mgag_create_i2c_bus(const char *name, unsigned bus_index, unsigned scrn_index)
+     I2CBusPtr I2CPtr = xf86CreateI2CBusRec();
+ 
+     if (I2CPtr != NULL) {
+-	I2CPtr->BusName = name;
++	I2CPtr->BusName = (char *)name;
+ 	I2CPtr->scrnIndex = scrn_index;
+ 	I2CPtr->I2CPutBits = MGAG_I2CPutBits;
+ 	I2CPtr->I2CGetBits = MGAG_I2CGetBits;
+ 	I2CPtr->AcknTimeout = 5;
+-	I2CPtr->DriverPrivate.ptr = & i2c_priv[bus_index];
++	I2CPtr->DriverPrivate.ptr = (void *)&i2c_priv[bus_index];
+ 
+ 	if (!xf86I2CBusInit(I2CPtr)) {
+ 	    xf86DestroyI2CBusRec(I2CPtr, TRUE, TRUE);
+@@ -2067,14 +2064,6 @@ void MGAGSetupFuncs(ScrnInfoPtr pScrn)
+     pMga->Save = MGAGSave;
+     pMga->Restore = MGAGRestore;
+     pMga->ModeInit = MGAGInit;
+-    if ((!pMga->is_G200WB) && (!pMga->is_G200ER)) {
+-        pMga->ddc1Read = MGAG_ddc1Read;
+-        /* vgaHWddc1SetSpeed will only work if the card is in VGA mode */
+-        pMga->DDC1SetSpeed = vgaHWddc1SetSpeedWeak();
+-    } else {
+-        pMga->ddc1Read = NULL;
+-        pMga->DDC1SetSpeed = NULL;
+-    }
+     pMga->i2cInit = MGAG_i2cInit;
+ }
+ 
+diff --git a/src/mga_driver.c b/src/mga_driver.c
+index f0b5abb..32dbb36 100644
+--- a/src/mga_driver.c
++++ b/src/mga_driver.c
+@@ -99,6 +99,8 @@
+ #include "dri.h"
+ #endif
+ 
++#include "mga_randr.h"
++
+ #include <unistd.h>
+ 
+ /*
+@@ -123,12 +125,6 @@ static Bool	MGACloseScreen(CLOSE_SCREEN_ARGS_DECL);
+ static Bool	MGASaveScreen(ScreenPtr pScreen, int mode);
+ static Bool	MGASaveScreenCrtc2(ScreenPtr pScreen, int mode);
+ 
+-/* This shouldn't be needed since RAC will disable all I/O for MGA cards. */
+-#ifdef DISABLE_VGA_IO
+-static void     VgaIOSave(int i, void *arg);
+-static void     VgaIORestore(int i, void *arg);
+-#endif
+-
+ /* Optional functions */
+ static void	MGAFreeScreen(FREE_SCREEN_ARGS_DECL);
+ static ModeStatus MGAValidMode(SCRN_ARG_TYPE arg, DisplayModePtr mode,
+@@ -155,7 +151,7 @@ static int MGAEntityIndex = -1;
+ 
+ static const struct mga_device_attributes attribs[] = {
+     /* 2064 */
+-    [0] = { 1, 0, 0, 1, 0, 0, 0, 0, old_BARs,  
++    [0] = { 1, 0, 0, 1, 0, 0, 0, old_BARs,
+ 	    (BLK_OPAQUE_EXPANSION | FASTBLT_BUG | USE_LINEAR_EXPANSION),
+ 	{
+ 	    { 0, 0 },          /* System VCO frequencies */
+@@ -171,7 +167,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* 1064 */
+-    [1] = { 0, 1, 0, 0, 1, 0, 0, 0, probe_BARs,
++    [1] = { 0, 1, 0, 0, 1, 0, 0, probe_BARs,
+             (USE_LINEAR_EXPANSION),
+ 	{
+ 	    /* There used to be code in MGARamdacInit (mga_dacG.c) that would
+@@ -191,7 +187,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* 2164 */
+-    [2] = { 1, 0, 0, 1, 0, 0, 0, 0, new_BARs,
++    [2] = { 1, 0, 0, 1, 0, 0, 0, new_BARs,
+             (BLK_OPAQUE_EXPANSION | TRANSC_SOLID_FILL | USE_RECTS_FOR_LINES
+ 	     | USE_LINEAR_EXPANSION),
+ 	{
+@@ -208,7 +204,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* 2164 AGP */
+-    [3] = { 1, 0, 0, 1, 0, 0, 0, 0, new_BARs,
++    [3] = { 1, 0, 0, 1, 0, 0, 0, new_BARs,
+             (BLK_OPAQUE_EXPANSION | TRANSC_SOLID_FILL | USE_RECTS_FOR_LINES
+ 	     | USE_LINEAR_EXPANSION),
+ 	{
+@@ -225,7 +221,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* G100 PCI */
+-    [4] = { 0, 1, 0, 0, 1, 0, 0, 0, new_BARs,
++    [4] = { 0, 1, 0, 0, 1, 0, 0, new_BARs,
+             (MGA_NO_PLANEMASK | USE_LINEAR_EXPANSION),
+ 	{
+ 	    { 50000, 230000 }, /* System VCO frequencies */
+@@ -241,7 +237,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* G100 AGP */
+-    [5] = { 0, 1, 0, 0, 1, 0, 0, 0, new_BARs,
++    [5] = { 0, 1, 0, 0, 1, 0, 0, new_BARs,
+             (MGA_NO_PLANEMASK | USE_LINEAR_EXPANSION),
+ 	{
+ 	    { 50000, 230000 }, /* System VCO frequencies */
+@@ -257,7 +253,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* G200 PCI */
+-    [6] = { 0, 1, 0, 0, 1, 1, 1, 1, new_BARs,
++    [6] = { 0, 1, 0, 0, 1, 1, 1, new_BARs,
+             (TRANSC_SOLID_FILL | TWO_PASS_COLOR_EXPAND | USE_LINEAR_EXPANSION),
+ 	{
+ 	    { 50000, 230000 }, /* System VCO frequencies */
+@@ -273,7 +269,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* G200 AGP */
+-    [7] = { 0, 1, 0, 0, 1, 1, 1, 1, new_BARs,
++    [7] = { 0, 1, 0, 0, 1, 1, 1, new_BARs,
+             (TRANSC_SOLID_FILL | TWO_PASS_COLOR_EXPAND | USE_LINEAR_EXPANSION),
+ 	{
+ 	    { 50000, 230000 }, /* System VCO frequencies */
+@@ -289,7 +285,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* G400 / G450 */
+-    [8] = { 0, 1, 1, 0, 1, 1, 2, 1, new_BARs,
++    [8] = { 0, 1, 1, 0, 1, 1, 2, new_BARs,
+             (TRANSC_SOLID_FILL | TWO_PASS_COLOR_EXPAND | USE_LINEAR_EXPANSION),
+ 	{
+ 	    { 50000, 252000 }, /* System VCO frequencies */
+@@ -305,7 +301,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* G550 */
+-    [9] = { 0, 1, 1, 0, 1, 1, 2, 1, new_BARs,
++    [9] = { 0, 1, 1, 0, 1, 1, 2, new_BARs,
+             (TRANSC_SOLID_FILL | TWO_PASS_COLOR_EXPAND | USE_LINEAR_EXPANSION),
+ 	{
+ 	    { 256000, 600000 }, /* System VCO frequencies */
+@@ -321,7 +317,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* G200SE A PCI */
+-    [10] = { 0, 1, 0, 0, 1, 0, 0, 1, new_BARs,
++    [10] = { 0, 1, 0, 0, 1, 0, 0, new_BARs,
+             (TRANSC_SOLID_FILL | TWO_PASS_COLOR_EXPAND | USE_LINEAR_EXPANSION),
+ 	{
+ 	    { 50000, 230000 }, /* System VCO frequencies */
+@@ -337,7 +333,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* G200SE B PCI */
+-    [11] = { 0, 1, 0, 0, 1, 0, 0, 1, new_BARs,
++    [11] = { 0, 1, 0, 0, 1, 0, 0, new_BARs,
+             (TRANSC_SOLID_FILL | TWO_PASS_COLOR_EXPAND | USE_LINEAR_EXPANSION),
+ 	{
+ 	    { 50000, 114000 }, /* System VCO frequencies */
+@@ -353,7 +349,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* G200EV */
+-    [12] = { 0, 1, 0, 0, 1, 0, 0, 0, new_BARs,
++    [12] = { 0, 1, 0, 0, 1, 0, 0, new_BARs,
+             (TRANSC_SOLID_FILL | TWO_PASS_COLOR_EXPAND | USE_LINEAR_EXPANSION),
+ 	{
+ 	    { 50000, 230000 }, /* System VCO frequencies */
+@@ -369,7 +365,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* G200WB */
+-    [13] = { 0, 1, 0, 0, 1, 0, 0, 0, new_BARs,
++    [13] = { 0, 1, 0, 0, 1, 0, 0, new_BARs,
+             (TRANSC_SOLID_FILL | TWO_PASS_COLOR_EXPAND | USE_LINEAR_EXPANSION),
+ 	{
+ 	    { 50000, 230000 }, /* System VCO frequencies */
+@@ -385,7 +381,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* G200EH */
+-    [14] = { 0, 1, 0, 0, 1, 0, 0, 0, new_BARs,
++    [14] = { 0, 1, 0, 0, 1, 0, 0, new_BARs,
+             (TRANSC_SOLID_FILL | TWO_PASS_COLOR_EXPAND | USE_LINEAR_EXPANSION),
+ 	{
+ 	    { 50000, 230000 }, /* System VCO frequencies */
+@@ -401,7 +397,7 @@ static const struct mga_device_attributes attribs[] = {
+     },
+ 
+     /* G200ER */
+-    [15] = { 0, 1, 0, 0, 1, 0, 0, 0, new_BARs,
++    [15] = { 0, 1, 0, 0, 1, 0, 0, new_BARs,
+             (TRANSC_SOLID_FILL | TWO_PASS_COLOR_EXPAND | USE_LINEAR_EXPANSION),
+ 	{
+ 	    { 50000, 230000 }, /* System VCO frequencies */
+@@ -420,8 +416,6 @@ static const struct mga_device_attributes attribs[] = {
+ #ifdef XSERVER_LIBPCIACCESS
+ #define MGA_DEVICE_MATCH(d, i) \
+     { 0x102B, (d), PCI_MATCH_ANY, PCI_MATCH_ANY, 0, 0, (i) }
+-#define MGA_SUBDEVICE_MATCH(d, s, i) \
+-    { 0x102B, (d), 0x102B, (s), 0, 0, (i) }
+ 
+ static const struct pci_id_match mga_device_match[] = {
+     MGA_DEVICE_MATCH(PCI_CHIP_MGA2064,     0),
+@@ -540,7 +534,6 @@ static const OptionInfoRec MGAOptions[] = {
+     { OPTION_SET_MCLK,		"SetMclk",	OPTV_FREQ,	{0}, FALSE },
+     { OPTION_OVERCLOCK_MEM,	"OverclockMem",	OPTV_BOOLEAN,	{0}, FALSE },
+     { OPTION_VIDEO_KEY,		"VideoKey",	OPTV_INTEGER,	{0}, FALSE },
+-    { OPTION_ROTATE,		"Rotate",	OPTV_ANYSTR,	{0}, FALSE },
+     { OPTION_TEXTURED_VIDEO,	"TexturedVideo",OPTV_BOOLEAN,	{0}, FALSE },
+     { OPTION_CRTC2HALF,		"Crtc2Half",	OPTV_BOOLEAN,	{0}, FALSE },
+     { OPTION_CRTC2RAM,		"Crtc2Ram",	OPTV_INTEGER,	{0}, FALSE },
+@@ -564,6 +557,7 @@ static const OptionInfoRec MGAOptions[] = {
+     { OPTION_PCIDMA,		"ForcePciDma",	OPTV_BOOLEAN,	{0}, FALSE },
+     { OPTION_ACCELMETHOD,	"AccelMethod",	OPTV_ANYSTR,	{0}, FALSE },
+     { OPTION_KVM,		"KVM",		OPTV_BOOLEAN,	{0}, FALSE },
++    { OPTION_RANDR12,		"RANDR12",	OPTV_BOOLEAN,	{0}, FALSE },
+     { -1,			NULL,		OPTV_NONE,	{0}, FALSE }
+ };
+ 
+@@ -667,13 +661,6 @@ MGAPciProbe(DriverPtr drv, int entity_num, struct pci_device * dev,
+     ScrnInfoPtr pScrn = NULL;
+     EntityInfoPtr pEnt;
+     MGAPtr pMga;
+-#ifdef DISABLE_VGA_IO
+-    MgaSavePtr smga;
+-
+-
+-    smga = xnfalloc(sizeof(MgaSave));
+-    smga->pvp = dev;
+-#endif
+ 
+     if (pci_device_has_kernel_driver(dev)) {
+ 	/* If it's a G200 server chip, it's probably on KMS, so bail; if not,
+@@ -696,13 +683,8 @@ MGAPciProbe(DriverPtr drv, int entity_num, struct pci_device * dev,
+ 
+     /* Allocate a ScrnInfoRec and claim the slot */
+     pScrn = xf86ConfigPciEntity(pScrn, 0, entity_num, MGAPciChipsets,
+-				NULL,
+-#ifndef DISABLE_VGA_IO
+-				NULL, NULL, NULL, NULL
+-#else
+-				VgaIOSave, VgaIOSave, VgaIORestore, smga
+-#endif
+-				);
++				NULL, NULL, NULL, NULL, NULL);
++
+     if (pScrn != NULL) {
+ 	/* Fill in what we can of the ScrnInfoRec */
+ 	pScrn->driverVersion	= MGA_VERSION;
+@@ -838,22 +820,11 @@ MGAProbe(DriverPtr drv, int flags)
+ 	ScrnInfoPtr pScrn = NULL;
+ 	EntityInfoPtr pEnt;
+ 	int attrib_no;
+-#ifdef DISABLE_VGA_IO
+-	MgaSavePtr smga;
+-#endif
+ 
+ 	/* Allocate a ScrnInfoRec and claim the slot */
+-#ifndef DISABLE_VGA_IO
+ 	pScrn = xf86ConfigPciEntity(pScrn, 0,usedChips[i],
+ 				    MGAPciChipsets, NULL, NULL,
+ 				    NULL, NULL, NULL);
+-#else
+-	smga = xnfalloc(sizeof(MgaSave));
+-	smga->pvp = xf86GetPciInfoForEntity(usedChips[i]);
+-	pScrn = xf86ConfigPciEntity(pScrn, 0,usedChips[i],
+-				    MGAPciChipsets, NULL,VgaIOSave,
+-				    VgaIOSave, VgaIORestore,smga);
+-#endif
+         if (pScrn != NULL) {
+ 	    MGAPtr pMga;
+ 
+@@ -1275,11 +1246,9 @@ MGAdoDDC(ScrnInfoPtr pScrn)
+     pMga = MGAPTR(pScrn);
+ 
+     /* Load DDC if we have the code to use it */
+-    /* This gives us DDC1 */
+-    if (pMga->ddc1Read || pMga->i2cInit) {
++    if (pMga->i2cInit) {
+ 	if (!xf86LoadSubModule(pScrn, "ddc")) {
+ 	    /* ddc module not found, we can do without it */
+-	    pMga->ddc1Read = NULL;
+ 	    pMga->DDC_Bus1 = NULL;
+ 	    pMga->DDC_Bus2 = NULL;
+ 	    return NULL;
+@@ -1311,13 +1280,6 @@ MGAdoDDC(ScrnInfoPtr pScrn)
+ 	hwp->MapSize = 0x10000;
+ 	if (!vgaHWMapMem(pScrn))
+ 	    return NULL;
+-    } else {
+-	/* XXX Need to write an MGA mode ddc1SetSpeed */
+-	if (pMga->DDC1SetSpeed == vgaHWddc1SetSpeedWeak()) {
+-	    pMga->DDC1SetSpeed = NULL;
+-	    xf86DrvMsgVerb(pScrn->scrnIndex, X_INFO, 2,
+-			   "DDC1 disabled - chip not in VGA mode\n");
+-	}
+     }
+ 
+     /* Save the current state */
+@@ -1345,14 +1307,6 @@ MGAdoDDC(ScrnInfoPtr pScrn)
+ 	    MonInfo = xf86DoEDID_DDC2(XF86_SCRN_ARG(pScrn), pMga->DDC_Bus1);
+ 	    from = "I2C";
+ 	}
+-	if (!MonInfo)
+-	    /* Read and output monitor info using DDC1 */
+-	    if (pMga->ddc1Read && pMga->DDC1SetSpeed) {
+-		MonInfo = xf86DoEDID_DDC1(XF86_SCRN_ARG(pScrn),
+-					  pMga->DDC1SetSpeed,
+-					  pMga->ddc1Read ) ;
+-		from = "DDC1";
+-	    }
+ 	if (!MonInfo){
+ 	    vbeInfoPtr pVbe;
+ 	    if (xf86LoadSubModule(pScrn, "vbe")) {
+@@ -1389,91 +1343,6 @@ MGAdoDDC(ScrnInfoPtr pScrn)
+     return MonInfo;
+ }
+ 
+-#ifdef DISABLE_VGA_IO
+-static void
+-VgaIOSave(int i, void *arg)
+-{
+-    MgaSavePtr sMga = arg;
+-#ifndef XSERVER_LIBPCIACCESS
+-    PCITAG tag = pciTag(sMga->pvp->bus,sMga->pvp->device,sMga->pvp->func);
+-#endif
+-    uint32_t temp;
+-
+-#ifdef DEBUG
+-    ErrorF("mga: VgaIOSave: %d:%d:%d\n", sMga->pvp->bus, sMga->pvp->device,
+-	   sMga->pvp->func);
+-#endif
+-#ifdef XSERVER_LIBPCIACCESS
+-    pci_device_cfg_read_u32(pMga->PciInfo, & temp, PCI_OPTION_REG);
+-#else
+-    temp = pciReadLong(tag, PCI_OPTION_REG);
+-#endif
+-    sMga->enable = (temp & 0x100) != 0;
+-}
+-
+-static void
+-VgaIORestore(int i, void *arg)
+-{
+-    MgaSavePtr sMga = arg;
+-#ifndef XSERVER_LIBPCIACCESS
+-    PCITAG tag = pciTag(sMga->pvp->bus,sMga->pvp->device,sMga->pvp->func);
+-#endif
+-
+-#ifdef DEBUG
+-    ErrorF("mga: VgaIORestore: %d:%d:%d\n", sMga->pvp->bus, sMga->pvp->device,
+-	   sMga->pvp->func);
+-#endif
+-#ifdef XSERVER_LIBPCIACCESS
+-    pci_device_cfg_write_bits(pMga->PciInfo, 0x00000100, sMga->enable,
+-			      PCI_OPTION_REG);
+-#else
+-    pciSetBitsLong(tag, PCI_OPTION_REG, 0x100, sMga->enable ? 0x100 : 0x000);
+-#endif
+-}
+-
+-static void
+-VgaIODisable(void *arg)
+-{
+-    MGAPtr pMga = arg;
+-
+-#ifdef DEBUG
+-    ErrorF("mga: VgaIODisable: %d:%d:%d, %s, xf86ResAccessEnter is %s\n",
+-	   pMga->PciInfo->bus, pMga->PciInfo->device, pMga->PciInfo->func,
+-	   pMga->Primary ? "primary" : "secondary",
+-	   BOOLTOSTRING(xf86ResAccessEnter));
+-#endif
+-    /* Turn off the vgaioen bit. */
+-#ifdef XSERVER_LIBPCIACCESS
+-    pci_device_cfg_write_bits(pMga->PciInfo, 0x00000100, 0x00000000,
+-			      PCI_OPTION_REG);
+-#else
+-    pciSetBitsLong(pMga->PciTag, PCI_OPTION_REG, 0x100, 0x000);
+-#endif
+-}
+-
+-static void
+-VgaIOEnable(void *arg)
+-{
+-    MGAPtr pMga = arg;
+-
+-#ifdef DEBUG
+-    ErrorF("mga: VgaIOEnable: %d:%d:%d, %s, xf86ResAccessEnter is %s\n",
+-	   pMga->PciInfo->bus, pMga->PciInfo->device, pMga->PciInfo->func,
+-	   pMga->Primary ? "primary" : "secondary",
+-	   BOOLTOSTRING(xf86ResAccessEnter));
+-#endif
+-    /* Turn on the vgaioen bit. */
+-    if (pMga->Primary) {
+-#ifdef XSERVER_LIBPCIACCESS
+-	pci_device_cfg_write_bits(pMga->PciInfo, 0x00000100, 0x00000100,
+-				  PCI_OPTION_REG);
+-#else
+-	pciSetBitsLong(pMga->PciTag, PCI_OPTION_REG, 0x100, 0x100);
+-#endif
+-    }
+-}
+-#endif /* DISABLE_VGA_IO */
+-
+ void
+ MGAProbeDDC(ScrnInfoPtr pScrn, int index)
+ {
+@@ -1509,6 +1378,29 @@ MGAMavenRead(ScrnInfoPtr pScrn, I2CByte reg, I2CByte *val)
+ 	return TRUE;
+ }
+ 
++static void
++setup_outputs(ScrnInfoPtr scrn)
++{
++    xf86OutputPtr output;
++
++    output = MGAG200EOutputInit(scrn);
++    output->possible_crtcs = 1;
++    output->possible_clones = 1;
++}
++
++static Bool
++crtc_config_resize(ScrnInfoPtr pScrn, int width, int height)
++{
++    pScrn->virtualX = width;
++    pScrn->virtualY = height;
++
++    return TRUE;
++}
++
++static const xf86CrtcConfigFuncsRec crtc_config_funcs = {
++    .resize = crtc_config_resize,
++};
++
+ /* Mandatory */
+ static Bool
+ MGAPreInit(ScrnInfoPtr pScrn, int flags)
+@@ -1587,20 +1479,10 @@ MGAPreInit(ScrnInfoPtr pScrn, int flags)
+ 
+     pMga->Primary = xf86IsPrimaryPci(pMga->PciInfo);
+ 
+-#ifndef DISABLE_VGA_IO
+ #ifndef XSERVER_LIBPCIACCESS
+     xf86SetOperatingState(resVgaIo, pMga->pEnt->index, ResUnusedOpr);
+     xf86SetOperatingState(resVgaMem, pMga->pEnt->index, ResDisableOpr);
+ #endif
+-#else
+-    /*
+-     * Set our own access functions, which control the vgaioen bit.
+-     */
+-    pMga->Access.AccessDisable = VgaIODisable;
+-    pMga->Access.AccessEnable = VgaIOEnable;
+-    pMga->Access.arg = pMga;
+-    xf86SetAccessFuncs(pMga->pEnt, &pMga->Access, &pMga->Access);
+-#endif
+ 
+     /* Set pScrn->monitor */
+     pScrn->monitor = pScrn->confScreen->monitor;
+@@ -1868,7 +1750,13 @@ MGAPreInit(ScrnInfoPtr pScrn, int flags)
+      */
+ 
+     /* Prefer 32bpp */
+-    flags24 = Support24bppFb | Support32bppFb | PreferConvert24to32;
++    flags24 = Support24bppFb | Support32bppFb;
++
++    /* Prefer 24bpp on the bandwidth-poor SE-A, sigh */
++    if (pMga->Chipset == PCI_CHIP_MGAG200_SE_A_PCI)
++	flags24 |= SupportConvert32to24 | PreferConvert32to24;
++    else
++	flags24 |= PreferConvert24to32;
+ 
+     if (pMga->SecondCrtc)
+ 	flags24 = Support32bppFb;
+@@ -2071,12 +1959,6 @@ MGAPreInit(ScrnInfoPtr pScrn, int flags)
+ 			  (1 << pScrn->offset.green) |
+         (((pScrn->mask.blue >> pScrn->offset.blue) - 1) << pScrn->offset.blue);
+     }
+-    if (xf86ReturnOptValBool(pMga->Options, OPTION_SHADOW_FB, FALSE)) {
+-	pMga->ShadowFB = TRUE;
+-	pMga->NoAccel = TRUE;
+-	xf86DrvMsg(pScrn->scrnIndex, X_CONFIG,
+-		"Using \"Shadow Framebuffer\" - acceleration disabled\n");
+-    }
+     if (xf86ReturnOptValBool(pMga->Options, OPTION_OVERCLOCK_MEM, FALSE)) {
+ 	pMga->OverclockMem = TRUE;
+ 	xf86DrvMsg(pScrn->scrnIndex, X_CONFIG, "Overclocking memory\n");
+@@ -2095,6 +1977,38 @@ MGAPreInit(ScrnInfoPtr pScrn, int flags)
+             } /* MGA_NOT_HAL */
+         } /* ISMGAGx50() */
+     }
++
++    /*
++     * Note this means you can ask for RANDR 1.2 on a chipset where it's not
++     * implemented.  That'll probably crash.  Don't do that.
++     */
++    if (!xf86GetOptValBool(pMga->Options, OPTION_RANDR12, &pMga->randr12)) {
++	switch (pMga->Chipset) {
++	case PCI_CHIP_MGAG200_SE_A_PCI:
++	case PCI_CHIP_MGAG200_SE_B_PCI:
++	case PCI_CHIP_MGAG200_WINBOND_PCI:
++	case PCI_CHIP_MGAG200_EV_PCI:
++	case PCI_CHIP_MGAG200_EH_PCI:
++	case PCI_CHIP_MGAG200_ER_PCI:
++	    pMga->randr12 = TRUE;
++	    break;
++	default:
++	    pMga->randr12 = FALSE;
++	}
++    }
++
++    if (pMga->randr12) {
++	pMga->ShadowFB = TRUE;
++	pMga->NoAccel = TRUE;
++	xf86DrvMsg(pScrn->scrnIndex, X_PROBED,
++		   "Using shadowfb for RANDR 1.2 support\n");
++    } else if (xf86ReturnOptValBool(pMga->Options, OPTION_SHADOW_FB, FALSE)) {
++	pMga->ShadowFB = TRUE;
++	pMga->NoAccel = TRUE;
++	xf86DrvMsg(pScrn->scrnIndex, X_CONFIG,
++		"Using \"Shadow Framebuffer\" - acceleration disabled\n");
++    }
++
+     if (pMga->FBDev) {
+ 	pScrn->SwitchMode    = fbdevHWSwitchModeWeak();
+ 	pScrn->AdjustFrame   = fbdevHWAdjustFrameWeak();
+@@ -2102,35 +2016,6 @@ MGAPreInit(ScrnInfoPtr pScrn, int flags)
+ 	pScrn->LeaveVT       = fbdevHWLeaveVTWeak();
+ 	pScrn->ValidMode     = fbdevHWValidModeWeak();
+     }
+-    pMga->Rotate = 0;
+-    if ((s = xf86GetOptValString(pMga->Options, OPTION_ROTATE))) {
+-        if(!pMga->MergedFB) {
+-            if(!xf86NameCmp(s, "CW")) {
+-                pMga->ShadowFB = TRUE;
+-                pMga->NoAccel = TRUE;
+-                pMga->HWCursor = FALSE;
+-                pMga->Rotate = 1;
+-                xf86DrvMsg(pScrn->scrnIndex, X_CONFIG,
+-                        "Rotating screen clockwise - acceleration disabled\n");
+-            } else
+-            if(!xf86NameCmp(s, "CCW")) {
+-                pMga->ShadowFB = TRUE;
+-                pMga->NoAccel = TRUE;
+-                pMga->HWCursor = FALSE;
+-                pMga->Rotate = -1;
+-                xf86DrvMsg(pScrn->scrnIndex, X_CONFIG,
+-                        "Rotating screen counter clockwise - acceleration disabled\n");
+-            } else {
+-                xf86DrvMsg(pScrn->scrnIndex, X_CONFIG,
+-                        "\"%s\" is not a valid value for Option \"Rotate\"\n", s);
+-                xf86DrvMsg(pScrn->scrnIndex, X_INFO,
+-                        "Valid options are \"CW\" or \"CCW\"\n");
+-            }
+-        } else {
+-            xf86DrvMsg(pScrn->scrnIndex, X_ERROR,
+-                " -- Rotation disabled.\n");
+-        }
+-    }
+ 
+     /* Load XAA if needed */
+     if (!pMga->NoAccel) {
+@@ -2217,10 +2102,6 @@ MGAPreInit(ScrnInfoPtr pScrn, int flags)
+         }
+     }
+ 
+-
+-    /* HW bpp matches reported bpp */
+-    pMga->HwBpp = pScrn->bitsPerPixel;
+-
+     /*
+      * Reset card if it isn't primary one
+      */
+@@ -2304,32 +2185,60 @@ MGAPreInit(ScrnInfoPtr pScrn, int flags)
+     pMga->BppShifts[2] = 0;
+     pMga->BppShifts[3] = 2;
+ 
++    if (pMga->randr12) {
++	xf86CrtcConfigInit(pScrn, &crtc_config_funcs);
++
++	/* who even knows if this is accurate */
++	xf86CrtcSetSizeRange(pScrn, 320, 200, 2048, 2048);
++
++	MGAGCrtc1Init(pScrn);
++	if (pMga->i2cInit)
++	    pMga->i2cInit(pScrn);
++
++	setup_outputs(pScrn);
++    }
++
+     /*
+      * fill MGAdac struct
+      * Warning: currently, it should be after RAM counting
+      */
+     (*pMga->PreInit)(pScrn);
+ 
++    if (!pMga->randr12) {
+ #if !defined(__powerpc__)
+-
+-    /* Read and print the Monitor DDC info */
+-    pScrn->monitor->DDC = MGAdoDDC(pScrn);
++	/* Read and print the Monitor DDC info */
++	pScrn->monitor->DDC = MGAdoDDC(pScrn);
+ #endif /* !__powerpc__ */
+ 
+-    if (!pScrn->monitor->DDC && pMga->is_G200SE) {
+-	/* Jam in ranges big enough for 1024x768 */
+-	if (!pScrn->monitor->nHsync) {
+-	    pScrn->monitor->nHsync = 1;
+-	    pScrn->monitor->hsync[0].lo = 31.5;
+-	    pScrn->monitor->hsync[0].hi = 48.0;
++	if (!pScrn->monitor->DDC && pMga->is_G200SE) {
++	    /* Jam in ranges big enough for 1024x768 */
++	    if (!pScrn->monitor->nHsync) {
++		pScrn->monitor->nHsync = 1;
++		pScrn->monitor->hsync[0].lo = 31.5;
++		pScrn->monitor->hsync[0].hi = 48.0;
++	    }
++	    if (!pScrn->monitor->nVrefresh) {
++		pScrn->monitor->nVrefresh = 1;
++		pScrn->monitor->vrefresh[0].lo = 56.0;
++		pScrn->monitor->vrefresh[0].hi = 75.0;
++	    }
+ 	}
+-	if (!pScrn->monitor->nVrefresh) {
+-	    pScrn->monitor->nVrefresh = 1;
+-	    pScrn->monitor->vrefresh[0].lo = 56.0;
+-	    pScrn->monitor->vrefresh[0].hi = 75.0;
++    }
++
++    if (pMga->randr12) {
++	if (!MGAMapMem(pScrn)) {
++	    ErrorF("cannot map memory for probing\n");
++	    return FALSE;
++	}
++
++	if (!xf86InitialConfiguration(pScrn, TRUE)) {
++	    MGAUnmapMem(pScrn);
++	    xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "Initial config failed\n");
++	    return FALSE;
+ 	}
++
++	MGAUnmapMem(pScrn);
+     }
+-	    
+ 
+     /*
+      * If the driver can do gamma correction, it should call xf86SetGamma()
+@@ -2429,7 +2338,7 @@ MGAPreInit(ScrnInfoPtr pScrn, int flags)
+      * pScrn->maxVValue are set.  Since our MGAValidMode() already takes
+      * care of this, we don't worry about setting them here.
+      */
+-    {
++    if (!pMga->randr12) {
+ 	int Pitches1[] =
+ 	  {640, 768, 800, 960, 1024, 1152, 1280, 1600, 1920, 2048, 0};
+ 	int Pitches2[] =
+@@ -2489,26 +2398,31 @@ MGAPreInit(ScrnInfoPtr pScrn, int flags)
+ 			      LOOKUP_BEST_REFRESH);
+       
+ 	free(linePitches);
+-    }
+ 
+-    if (i < 1 && pMga->FBDev) {
+-	fbdevHWUseBuildinMode(pScrn);
+-	pScrn->displayWidth = pScrn->virtualX; /* FIXME: might be wrong */
+-	i = 1;
+-    }
+-    if (i == -1) {
+-	xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "Validate Modes Failed\n");
+-	MGAFreeRec(pScrn);
+-	return FALSE;
+-    }
++	if (i < 1 && pMga->FBDev) {
++	    fbdevHWUseBuildinMode(pScrn);
++	    pScrn->displayWidth = pScrn->virtualX; /* FIXME: might be wrong */
++	    i = 1;
++	}
++	if (i == -1) {
++	    xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "Validate Modes Failed\n");
++	    MGAFreeRec(pScrn);
++	    return FALSE;
++	}
+ 
+-    /* Prune the modes marked as invalid */
+-    xf86PruneDriverModes(pScrn);
++	/* Prune the modes marked as invalid */
++	xf86PruneDriverModes(pScrn);
+ 
+-    if (i == 0 || pScrn->modes == NULL) {
+-	xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "No valid modes found\n");
+-	MGAFreeRec(pScrn);
+-	return FALSE;
++	if (i == 0 || pScrn->modes == NULL) {
++	    xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "No valid modes found\n");
++	    MGAFreeRec(pScrn);
++	    return FALSE;
++	}
++    } else { /* RANDR 1.2 */
++	if (!xf86RandR12PreInit(pScrn)) {
++	    xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "RANDR init failure\n");
++	    return FALSE;
++	}
+     }
+ 
+     /* If the Device section explicitly set HasSDRAM, don't bother checking.
+@@ -2599,7 +2513,7 @@ MGAPreInit(ScrnInfoPtr pScrn, int flags)
+ 
+     xf86DrvMsgVerb(pScrn->scrnIndex, X_INFO, 2, "YDstOrg is set to %d\n",
+ 		   pMga->YDstOrg);
+-    if(pMga->DualHeadEnabled) {
++    if(pMga->DualHeadEnabled && !pMga->randr12) {
+         if(pMga->SecondCrtc == FALSE) {
+ 	    pMga->FbUsableSize = pMgaEnt->masterFbMapSize;
+             /* Allocate HW cursor buffer at the end of video ram */
+@@ -2767,18 +2681,10 @@ MGAMapMem(ScrnInfoPtr pScrn)
+ 	if (pMga->IOBase == NULL)
+ 	    return FALSE;
+ 
+-    if (pMga->is_G200ER)
+-    {
+         pMga->FbBase = xf86MapPciMem(pScrn->scrnIndex, VIDMEM_FRAMEBUFFER,
+                          pMga->PciTag, pMga->FbAddress,
+                          pMga->FbMapSize);
+-    }
+-    else
+-    {
+-        pMga->FbBase = xf86MapPciMem(pScrn->scrnIndex, VIDMEM_FRAMEBUFFER,
+-                         pMga->PciTag, pMga->FbAddress,
+-                         pMga->FbMapSize);
+-    }
++
+ 	if (pMga->FbBase == NULL)
+ 	    return FALSE;
+ #endif
+@@ -2927,12 +2833,33 @@ MGASave(ScrnInfoPtr pScrn)
+     (*pMga->Save)(pScrn, vgaReg, mgaReg, pMga->Primary);
+ }
+ 
++static void
++MGARandR12Save(ScrnInfoPtr pScrn)
++{
++    xf86CrtcConfigPtr config = XF86_CRTC_CONFIG_PTR(pScrn);
++    int i;
++
++    /* Save CRTC states */
++    for (i = 0; i < config->num_crtc; i++) {
++	xf86CrtcPtr crtc = config->crtc[i];
++	crtc->funcs->save(crtc);
++    }
++
++    /* Save output states */
++    for (i = 0; i < config->num_output; i++) {
++	xf86OutputPtr output = config->output[i];
++	output->funcs->save(output);
++    }
++}
++
+ /*
+  * Initialise a new mode.  This is currently still using the old
+  * "initialise struct, restore/write struct to HW" model.  That could
+  * be changed.
+  */
+ 
++/* JX this is MGASetMode in the branch; needed? */
++
+ static Bool
+ MGAModeInit(ScrnInfoPtr pScrn, DisplayModePtr mode)
+ {
+@@ -2982,7 +2909,7 @@ MGAModeInit(ScrnInfoPtr pScrn, DisplayModePtr mode)
+     }
+ 
+     /* Reset tagfifo*/ 
+-	if (pMga->is_G200ER) 
++    if (pMga->is_G200ER)
+     {
+         CARD32 ulMemCtl = INREG(MGAREG_MEMCTL);
+         CARD8  ucSeq1;
+@@ -3008,7 +2935,7 @@ MGAModeInit(ScrnInfoPtr pScrn, DisplayModePtr mode)
+      Higher HiPriLvl will reduce drawing performance
+      We need to give enough bandwith to crtc to avoid visual artifact
+     */
+-	if (pMga->is_G200SE) 
++    if (pMga->is_G200SE)
+     {
+         if (pMga->reg_1e24 >= 0x02)
+         {
+@@ -3055,12 +2982,12 @@ MGAModeInit(ScrnInfoPtr pScrn, DisplayModePtr mode)
+                 xf86DrvMsg(pScrn->scrnIndex, X_INFO, "Clock           == %d\n",   mode->Clock);
+                 xf86DrvMsg(pScrn->scrnIndex, X_INFO, "BitsPerPixel    == %d\n",   pScrn->bitsPerPixel);
+                 OUTREG8(0x1FDE, 0x06);
+-	            if (pMga->reg_1e24 >= 0x01)
++		if (pMga->reg_1e24 >= 0x01)
+                 {
+ 		            OUTREG8(0x1FDF, 0x03);
+                     xf86DrvMsg(pScrn->scrnIndex, X_INFO, "HiPriLvl        == 03\n");
+                 }
+-	            else 
++		else
+                 {
+ 		            OUTREG8(0x1FDF, 0x14);
+                     xf86DrvMsg(pScrn->scrnIndex, X_INFO, "HiPriLvl        == 14h\n");
+@@ -3183,6 +3110,27 @@ MGARestore(ScrnInfoPtr pScrn)
+     }
+ }
+ 
++static void
++MGARandR12Restore(ScrnInfoPtr pScrn)
++{
++    xf86CrtcConfigPtr config = XF86_CRTC_CONFIG_PTR(pScrn);
++    int i;
++
++    if (pScrn->pScreen != NULL)
++	MGAStormSync(pScrn);
++
++    /* Restore CRTC states */
++    for (i = 0; i < config->num_crtc; i++) {
++	xf86CrtcPtr crtc = config->crtc[i];
++	crtc->funcs->restore(crtc);
++    }
++
++    /* Restore output states */
++    for (i = 0; i < config->num_output; i++) {
++	xf86OutputPtr output = config->output[i];
++	output->funcs->restore(output);
++    }
++}
+ 
+ /* Workaround for a G400 CRTC2 display problem */
+ static void
+@@ -3284,8 +3232,8 @@ MGAScreenInit(SCREEN_INIT_ARGS_DECL)
+        pPriv = xf86GetEntityPrivate(pScrn->entityList[0], MGAEntityIndex);
+        pMgaEnt = pPriv->ptr;
+        pMgaEnt->refCount++;
+-    } else {
+     }
++
+     if (pMga->is_G200SE) {
+ 	pScrn->videoRam = VRTemp;
+ 	pMga->FbMapSize = FBTemp;
+@@ -3296,7 +3244,14 @@ MGAScreenInit(SCREEN_INIT_ARGS_DECL)
+     vgaHWGetIOBase(hwp);
+ 
+     /* Map the VGA memory when the primary video */
+-    if (!pMga->FBDev) {
++    if (pMga->randr12) {
++	pScrn->vtSema = TRUE;
++
++	MGARandR12Save(pScrn);
++	xf86SetDesiredModes(pScrn);
++	MGAStormSync(pScrn);
++	MGAStormEngineInit(pScrn);
++    } else if (!pMga->FBDev) {
+ 	if (pMga->Primary) {
+ 	    hwp->MapSize = 0x10000;
+ 	    if (!vgaHWMapMem(pScrn))
+@@ -3308,8 +3263,7 @@ MGAScreenInit(SCREEN_INIT_ARGS_DECL)
+ 	/* Initialise the first mode */
+ 	if (!MGAModeInit(pScrn, pScrn->currentMode))
+ 	    return FALSE;
+-    }
+-    else {
++    } else {
+ 	fbdevHWSave(pScrn);
+ 	/* Disable VGA core, and leave memory access on */
+ #ifdef XSERVER_LIBPCIACCESS
+@@ -3332,8 +3286,10 @@ MGAScreenInit(SCREEN_INIT_ARGS_DECL)
+ 
+     /* Darken the screen for aesthetic reasons and set the viewport 
+      */
+-    (*pScreen->SaveScreen)(pScreen, SCREEN_SAVER_ON);
+-    pScrn->AdjustFrame(ADJUST_FRAME_ARGS(pScrn, pScrn->frameX0, pScrn->frameY0));
++    if (!pMga->randr12) {
++        (*pScreen->SaveScreen)(pScreen, SCREEN_SAVER_ON);
++        pScrn->AdjustFrame(ADJUST_FRAME_ARGS(pScrn, pScrn->frameX0, pScrn->frameY0));
++    }
+ 
+ 
+     /*
+@@ -3380,21 +3336,28 @@ MGAScreenInit(SCREEN_INIT_ARGS_DECL)
+      * pScreen fields.
+      */
+ 
+-    width = pScrn->virtualX;
+-    height = pScrn->virtualY;
+-    displayWidth = pScrn->displayWidth;
+-
+-
+-    if(pMga->Rotate) {
+-	height = pScrn->virtualX;
+-	width = pScrn->virtualY;
++    if (pMga->randr12) {
++	width = displayWidth = pScrn->displayWidth = pScrn->virtualX;
++    } else {
++	width = pScrn->virtualX;
++	displayWidth = pScrn->displayWidth;
+     }
++    height = pScrn->virtualY;
+ 
+     if(pMga->ShadowFB) {
+- 	pMga->ShadowPitch = BitmapBytePad(pScrn->bitsPerPixel * width);
+-	pMga->ShadowPtr = malloc(pMga->ShadowPitch * height);
++        /*
++         * I don't really feel like faffing about with resizing the
++         * shadow buffer when the front buffer grows in RANDR, so I'm
++         * just going to allocate enough up front and let the upload hook
++         * correct for width.
++         */
++        if (pMga->randr12)
++            pMga->ShadowPitch = BitmapBytePad(pScrn->bitsPerPixel * 2048);
++        else
++            pMga->ShadowPitch = BitmapBytePad(pScrn->bitsPerPixel * width);
++
+ 	displayWidth = pMga->ShadowPitch / (pScrn->bitsPerPixel >> 3);
+-        FBStart = pMga->ShadowPtr;
++        FBStart = pMga->ShadowPtr = malloc(pMga->ShadowPitch * height);
+     } else {
+ 	pMga->ShadowPtr = NULL;
+ 	FBStart = pMga->FbStart;
+@@ -3475,7 +3438,8 @@ MGAScreenInit(SCREEN_INIT_ARGS_DECL)
+     pMga->BlockHandler = pScreen->BlockHandler;
+     pScreen->BlockHandler = MGABlockHandler;
+ 
+-    if(!pMga->ShadowFB) /* hardware cursor needs to wrap this layer */
++    /* hardware cursor needs to wrap this layer */
++    if (!pMga->ShadowFB && !pMga->randr12)
+ 	MGADGAInit(pScreen);
+ 
+     if (!pMga->NoAccel) {
+@@ -3487,6 +3451,9 @@ MGAScreenInit(SCREEN_INIT_ARGS_DECL)
+ 	    MGAStormAccelInit(pScreen);
+     }
+ 
++    if (pMga->randr12 && !MGAEnterVT(VT_FUNC_ARGS))
++	return FALSE;
++
+     xf86SetBackingStore(pScreen);
+     xf86SetSilkenMouse(pScreen);
+ 
+@@ -3501,7 +3468,7 @@ MGAScreenInit(SCREEN_INIT_ARGS_DECL)
+ 	    xf86DrvMsg(pScrn->scrnIndex, X_ERROR,
+ 		"Hardware cursor initialization failed\n");
+     }
+-    if(pMga->MergedFB) {
++    if (pMga->MergedFB && !pMga->randr12) {
+         /* Rotate and MergedFB are mutiualy exclusive, so we can use this 
+          * variable.
+          */
+@@ -3529,28 +3496,25 @@ MGAScreenInit(SCREEN_INIT_ARGS_DECL)
+     if(pMga->ShadowFB) {
+ 	RefreshAreaFuncPtr refreshArea = MGARefreshArea;
+ 
+-	if(pMga->Rotate) {
+-	    if (!pMga->PointerMoved) {
+-	    pMga->PointerMoved = pScrn->PointerMoved;
+-	    pScrn->PointerMoved = MGAPointerMoved;
+-	    }
+-
+-	   switch(pScrn->bitsPerPixel) {
+-	   case 8:	refreshArea = MGARefreshArea8;	break;
+-	   case 16:	refreshArea = MGARefreshArea16;	break;
+-	   case 24:	refreshArea = MGARefreshArea24;	break;
+-	   case 32:	refreshArea = MGARefreshArea32;	break;
+-	   }
+-	}
+-
+ 	ShadowFBInit(pScreen, refreshArea);
+     }
+ 
+-    xf86DPMSInit(pScreen, mga_dpms_set_proc, 0);
++    if (pMga->randr12)
++	xf86DPMSInit(pScreen, xf86DPMSSet, 0);
++    else
++	xf86DPMSInit(pScreen, mga_dpms_set_proc, 0);
+ 
+     pScrn->memPhysBase = pMga->FbAddress;
+     pScrn->fbOffset = pMga->YDstOrg * (pScrn->bitsPerPixel / 8);
+ 
++    if (pMga->randr12) {
++	pScreen->SaveScreen = xf86SaveScreen;
++	pMga->CloseScreen = pScreen->CloseScreen;
++	pScreen->CloseScreen = MGACloseScreen;
++
++	xf86CrtcScreenInit(pScreen);
++    }
++
+     MGAInitVideo(pScreen);
+ 
+ #ifdef MGADRI
+@@ -3571,8 +3535,10 @@ MGAScreenInit(SCREEN_INIT_ARGS_DECL)
+ #endif
+ 
+     /* Wrap the current CloseScreen function */
+-    pMga->CloseScreen = pScreen->CloseScreen;
+-    pScreen->CloseScreen = MGACloseScreen;
++    if (!pMga->randr12) {
++	pMga->CloseScreen = pScreen->CloseScreen;
++	pScreen->CloseScreen = MGACloseScreen;
++    }
+ 
+     /* Report any unused options (only for the first generation) */
+     if (serverGeneration == 1) {
+@@ -3600,15 +3566,6 @@ MGASwitchMode(SWITCH_MODE_ARGS_DECL)
+ 	return MGAModeInit(pScrn, mode);
+ }
+  
+- /* Adjusts coordinates to match Panning granularity.
+-  * does nothing if the HALlib is not loaded
+-  */
+-void
+-MGAAdjustGranularity(ScrnInfoPtr pScrn, int* x, int* y)
+-{
+-}
+-
+-
+ /*
+  * This function is used to initialize the Start Address - the first
+  * displayed location in the video memory.
+@@ -3618,7 +3575,7 @@ void
+ MGAAdjustFrame(ADJUST_FRAME_ARGS_DECL)
+ {
+     SCRN_INFO_PTR(arg);
+-    int Base, tmp, count;
++    int Base, tmp, count, last_vcount;
+ 
+     MGAFBLayout *pLayout;
+     MGAPtr pMga;
+@@ -3648,8 +3605,14 @@ MGAAdjustFrame(ADJUST_FRAME_ARGS_DECL)
+         while (INREG8(0x1FDA) & 0x08);
+         while (!(INREG8(0x1FDA) & 0x08));
+         /* wait until we're past the start (fixseg.c in the DDK) */
+-        count = INREG(MGAREG_VCOUNT) + 2;
+-        while(INREG(MGAREG_VCOUNT) < count);
++        last_vcount = INREG(MGAREG_VCOUNT);
++        count = last_vcount + 2;
++        while (1) {
++           int vcount = INREG(MGAREG_VCOUNT);
++           if (vcount >= count) break;
++           if (vcount < last_vcount) break;
++           last_vcount = vcount;
++        }
+ 
+         OUTREG16(MGAREG_CRTC_INDEX, (Base & 0x00FF00) | 0x0C);
+         OUTREG16(MGAREG_CRTC_INDEX, ((Base & 0x0000FF) << 8) | 0x0D);
+@@ -3693,6 +3656,19 @@ MGAAdjustFrameCrtc2(ADJUST_FRAME_ARGS_DECL)
+  * We may wish to unmap video/MMIO memory too.
+  */
+ 
++static Bool
++MGARandR12EnterVT(VT_FUNC_ARGS_DECL)
++{
++    SCRN_INFO_PTR(arg);
++    MGAPtr pMga = MGAPTR(pScrn);
++
++    xf86SetDesiredModes(pScrn);
++    MGAStormSync(pScrn);
++    MGAStormEngineInit(pScrn);
++
++    return TRUE;
++}
++
+ /* Mandatory */
+ static Bool
+ MGAEnterVT(VT_FUNC_ARGS_DECL)
+@@ -3702,6 +3678,9 @@ MGAEnterVT(VT_FUNC_ARGS_DECL)
+ 
+     pMga = MGAPTR(pScrn);
+ 
++    if (pMga->randr12)
++	return MGARandR12EnterVT(VT_FUNC_ARGS);
++
+ #ifdef MGADRI
+     if (pMga->directRenderingEnabled) {
+ 	if (pMga->irq) {
+@@ -3772,7 +3751,10 @@ MGALeaveVT(VT_FUNC_ARGS_DECL)
+     ScreenPtr pScreen;
+ #endif
+ 
+-    MGARestore(pScrn);
++    if (pMga->randr12)
++	MGARandR12Restore(pScrn);
++    else
++	MGARestore(pScrn);
+     vgaHWLock(hwp);
+ 
+ #ifdef MGADRI
+@@ -3824,7 +3806,10 @@ MGACloseScreen(CLOSE_SCREEN_ARGS_DECL)
+ 	    fbdevHWRestore(pScrn);
+ 	    MGAUnmapMem(pScrn);
+         } else {
+-	    MGARestore(pScrn);
++	    if (pMga->randr12)
++		MGARandR12Restore(pScrn);
++	    else
++		MGARestore(pScrn);
+ 	    vgaHWLock(hwp);
+ 	    MGAUnmapMem(pScrn);
+ 	    vgaHWUnmapMem(pScrn);
+@@ -3924,11 +3909,9 @@ xf86ModeBandwidth(DisplayModePtr mode, int depth)
+ 
+ /* Checks if a mode is suitable for the selected chipset. */
+ 
+-/* Optional */
+-static ModeStatus
+-MGAValidMode(SCRN_ARG_TYPE arg, DisplayModePtr mode, Bool verbose, int flags)
++ModeStatus
++mga_valid_mode(ScrnInfoPtr pScrn, DisplayModePtr mode, int flags)
+ {
+-    SCRN_INFO_PTR(arg);
+     int lace;
+     MGAPtr pMga = MGAPTR(pScrn);
+ 
+@@ -3970,6 +3953,13 @@ MGAValidMode(SCRN_ARG_TYPE arg, DisplayModePtr mode, Bool verbose, int flags)
+         return MODE_BANDWIDTH;
+     }
+ 
++    if (pMga->is_G200SE || pMga->is_G200WB || pMga->is_G200EV ||
++	pMga->is_G200EH || pMga->is_G200ER) {
++	if (mode->HDisplay % 8 || mode->HSyncStart % 8 ||
++	    mode->HSyncEnd % 8 || mode->HTotal % 8)
++	    return MODE_H_ILLEGAL;
++    }
++
+     lace = 1 + ((mode->Flags & V_INTERLACE) != 0);
+ 
+     if ((mode->CrtcHDisplay <= 2048) &&
+@@ -3995,6 +3985,16 @@ MGAValidMode(SCRN_ARG_TYPE arg, DisplayModePtr mode, Bool verbose, int flags)
+     } else {
+ 	return(MODE_BAD);
+     }
++
++}
++
++/* Optional */
++static ModeStatus
++MGAValidMode(SCRN_ARG_TYPE arg, DisplayModePtr mode, Bool verbose, int flags)
++{
++    SCRN_INFO_PTR(arg);
++
++    return mga_valid_mode(pScrn, mode, flags);
+ }
+ 
+ 
+diff --git a/src/mga_g_crtc.c b/src/mga_g_crtc.c
+new file mode 100644
+index 0000000..f01becf
+--- /dev/null
++++ b/src/mga_g_crtc.c
+@@ -0,0 +1,1220 @@
++/*
++ * Copyright 2007 Tilman Sauerbeck
++ * Copyright 2012 Red Hat, Inc.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software")
++ * to deal in the software without restriction, including without limitation
++ * on the rights to use, copy, modify, merge, publish, distribute, sub
++ * license, and/or sell copies of the Software, and to permit persons to whom
++ * them Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice (including the next
++ * paragraph) shall be included in all copies or substantial portions of the
++ * Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTIBILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER
++ * IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF OR IN
++ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ *
++ * Authors:
++ *    Tilman Sauerbeck <tilman@code-monkey.de>
++ *    Adam Jackson <ajax@redhat.com>
++ *
++ * Sources:
++ *    xf86-video-intel, mga_dacG.c
++ */
++
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
++/* All drivers should typically include these */
++#include "xf86.h"
++#include "xf86_OSproc.h"
++
++/* Drivers that need to access the PCI config space directly need this */
++#include "xf86Pci.h"
++
++#include "mga_reg.h"
++#include "mga.h"
++#include "mga_macros.h"
++#include "mga_randr.h"
++
++#include <unistd.h>
++
++/*
++ * Only change bits shown in this mask.  Ideally reserved bits should be
++ * zeroed here.  Also, don't change the vgaioen bit here since it is
++ * controlled elsewhere.
++ *
++ * XXX These settings need to be checked.
++ */
++#define OPTION1_MASK	0xFFFFFEFF
++#define OPTION2_MASK	0xFFFFFFFF
++#define OPTION3_MASK	0xFFFFFFFF
++
++#define OPTION1_MASK_PRIMARY	0xFFFC0FF
++
++typedef struct {
++    unsigned char ExtVga[6];
++    unsigned char DacRegs[0x50];
++    unsigned char PllM;
++    unsigned char PllN;
++    unsigned char PllP;
++    unsigned char ExtVga_Index24;
++    unsigned char Dac_Index90;
++    CARD32 Option;
++    CARD32 Option2;
++    CARD32 Option3;
++    Bool PIXPLLCSaved;
++    long clock;
++} MgaCrtcStateRec, *MgaCrtcStatePtr;
++
++typedef struct {
++    MgaCrtcStateRec saved_state;
++} MgaCrtcDataRec, *MgaCrtcDataPtr;
++
++static void
++MGAG200WBPrepareForModeSwitch(ScrnInfoPtr pScrn)
++{
++    MGAPtr pMga = MGAPTR(pScrn);
++
++    unsigned char ucTmpData = 0;
++    int ulIterationMax = 0;
++    // 1- The first step is to warn the BMC of an upcoming mode change.
++    // We are putting the misc<0> to output.
++    ucTmpData = inMGAdac(MGA1064_GEN_IO_CTL);
++    ucTmpData |= 0x10;
++    outMGAdac(MGA1064_GEN_IO_CTL, ucTmpData);
++
++    // We are putting a 1 on the misc<0> line.
++    ucTmpData = inMGAdac(MGA1064_GEN_IO_DATA);
++    ucTmpData |= 0x10;
++    outMGAdac(MGA1064_GEN_IO_DATA, ucTmpData);
++
++    // 2- The second step is to mask any further scan request
++    // This will be done by asserting the remfreqmsk bit (XSPAREREG<7>)
++    ucTmpData = inMGAdac(MGA1064_SPAREREG);
++    ucTmpData |= 0x80;
++    outMGAdac(MGA1064_SPAREREG, ucTmpData);
++
++    // 3a- The third step is to verify if there is an active scan
++    // We are searching for a 0 on remhsyncsts (XSPAREREG<0>)
++    ulIterationMax = 300;
++    while (!(ucTmpData & 0x01) && ulIterationMax)
++    {
++        ucTmpData = inMGAdac(MGA1064_SPAREREG);
++        usleep(1000);
++        ulIterationMax--;
++    }
++
++    // 3b- This step occurs only if the remote is actually scanning
++    // We are waiting for the end of the frame which is a 1 on
++    // remvsyncsts (XSPAREREG<1>)
++    if (ulIterationMax)
++    {
++        ulIterationMax = 300;
++        while ((ucTmpData & 0x02) && ulIterationMax)
++        {
++            ucTmpData = inMGAdac(MGA1064_SPAREREG);
++            usleep(1000);
++            ulIterationMax--;
++        }
++    }
++}
++
++static void
++MGAG200WBRestoreFromModeSwitch(ScrnInfoPtr pScrn)
++{
++    MGAPtr pMga = MGAPTR(pScrn);
++
++    unsigned char ucTmpData = 0;
++
++    // 1- The first step is to ensure that the vrsten and hrsten are set
++    OUTREG8(MGAREG_CRTCEXT_INDEX, 0x01);
++    ucTmpData = INREG8(MGAREG_CRTCEXT_DATA);
++    OUTREG8(MGAREG_CRTCEXT_DATA, ucTmpData | 0x88);
++
++    // 2- The second step is is to assert the rstlvl2
++    ucTmpData = inMGAdac(MGA1064_REMHEADCTL2);
++    ucTmpData |= 0x08;
++    outMGAdac(MGA1064_REMHEADCTL2, ucTmpData);
++
++    // - Wait for 10 us
++    usleep(10);
++
++    // 3- The next step is is to deassert the rstlvl2
++    ucTmpData &= ~0x08;
++    outMGAdac(MGA1064_REMHEADCTL2, ucTmpData);
++
++    // - Wait for 10 us
++    usleep(10);
++
++    // 4- The fourth step is to remove the mask of scan request
++    // This will be done by deasserting the remfreqmsk bit (XSPAREREG<7>)
++    ucTmpData = inMGAdac(MGA1064_SPAREREG);
++    ucTmpData &= ~0x80;
++    outMGAdac(MGA1064_SPAREREG, ucTmpData);
++
++    // 5- Finally, we are putting back a 0 on the misc<0> line.
++    ucTmpData = inMGAdac(MGA1064_GEN_IO_DATA);
++    ucTmpData &= ~0x10;
++    outMGAdac(MGA1064_GEN_IO_DATA, ucTmpData);
++}
++
++static void
++MGAG200EVPIXPLLSET(ScrnInfoPtr pScrn, MgaCrtcStatePtr mgaReg)
++{
++    MGAPtr pMga = MGAPTR(pScrn);
++
++    unsigned char ucTempByte, ucPixCtrl;
++
++    // Set pixclkdis to 1
++    ucPixCtrl = inMGAdac(MGA1064_PIX_CLK_CTL);
++    ucPixCtrl |= MGA1064_PIX_CLK_CTL_CLK_DIS;
++    outMGAdac(MGA1064_PIX_CLK_CTL, ucPixCtrl);
++
++    // Select PLL Set C
++    ucTempByte = INREG8(MGAREG_MEM_MISC_READ);
++    ucTempByte |= 0x3<<2; //select MGA pixel clock
++    OUTREG8(MGAREG_MEM_MISC_WRITE, ucTempByte);
++
++    // Set pixlock to 0
++    ucTempByte = inMGAdac(MGA1064_PIX_PLL_STAT);
++    outMGAdac(MGA1064_PIX_PLL_STAT, ucTempByte & ~0x40);
++
++    //    Set pix_stby to 1
++    ucPixCtrl |= MGA1064_PIX_CLK_CTL_CLK_POW_DOWN;
++    outMGAdac(MGA1064_PIX_CLK_CTL, ucPixCtrl);
++
++    // Program the Pixel PLL Register
++    outMGAdac(MGA1064_EV_PIX_PLLC_M, mgaReg->PllM);
++    outMGAdac(MGA1064_EV_PIX_PLLC_N, mgaReg->PllN);
++    outMGAdac(MGA1064_EV_PIX_PLLC_P, mgaReg->PllP);
++
++    // Wait 50 us
++    usleep(50);
++
++    // Set pix_stby to 0
++    ucPixCtrl &= ~MGA1064_PIX_CLK_CTL_CLK_POW_DOWN;
++    outMGAdac(MGA1064_PIX_CLK_CTL, ucPixCtrl);
++
++    // Wait 500 us
++    usleep(500);
++
++    // Select the pixel PLL by setting pixclksel to 1
++    ucTempByte = inMGAdac(MGA1064_PIX_CLK_CTL);
++    ucTempByte &= ~MGA1064_PIX_CLK_CTL_SEL_MSK;
++    ucTempByte |= MGA1064_PIX_CLK_CTL_SEL_PLL;
++    outMGAdac(MGA1064_PIX_CLK_CTL, ucTempByte);
++
++    // Set pixlock to 1
++    ucTempByte = inMGAdac(MGA1064_PIX_PLL_STAT);
++    outMGAdac(MGA1064_PIX_CLK_CTL, ucTempByte | 0x40);
++
++    // Reset dotclock rate bit.
++    ucTempByte = INREG8(MGAREG_MEM_MISC_READ);
++    ucTempByte |= 0x3<<2; //select MGA pixel clock
++    OUTREG8(MGAREG_MEM_MISC_WRITE, ucTempByte);
++
++    OUTREG8(MGAREG_SEQ_INDEX, 1);
++    ucTempByte = INREG8(MGAREG_SEQ_DATA);
++    OUTREG8(MGAREG_SEQ_DATA, ucTempByte & ~0x8);
++
++    // Set pixclkdis to 0
++    ucTempByte = inMGAdac(MGA1064_PIX_CLK_CTL);
++    ucTempByte &= ~MGA1064_PIX_CLK_CTL_CLK_DIS;
++    outMGAdac(MGA1064_PIX_CLK_CTL, ucTempByte);
++}
++
++static void
++MGAG200WBPIXPLLSET(ScrnInfoPtr pScrn, MgaCrtcStatePtr mgaReg)
++{
++    MGAPtr pMga = MGAPTR(pScrn);
++
++    unsigned long ulLoopCount, ulLockCheckIterations = 0, ulTempCount, ulVCount;
++    unsigned char ucTempByte, ucPixCtrl, ucPLLLocked = FALSE;
++
++    while(ulLockCheckIterations <= 32 && ucPLLLocked == FALSE)
++    {
++        if(ulLockCheckIterations > 0)
++        {
++            OUTREG8(MGAREG_CRTCEXT_INDEX, 0x1E);
++            ucTempByte = INREG8(MGAREG_CRTCEXT_DATA);
++            if(ucTempByte < 0xFF)
++            {
++                OUTREG8(MGAREG_CRTCEXT_DATA, ucTempByte+1);
++            }
++        }
++
++        // Set pixclkdis to 1
++        ucPixCtrl = inMGAdac(MGA1064_PIX_CLK_CTL);
++        ucPixCtrl |= MGA1064_PIX_CLK_CTL_CLK_DIS;
++        outMGAdac(MGA1064_PIX_CLK_CTL, ucPixCtrl);
++
++        ucTempByte = inMGAdac(MGA1064_REMHEADCTL);
++        ucTempByte |= MGA1064_REMHEADCTL_CLKDIS;
++        outMGAdac(MGA1064_REMHEADCTL, ucTempByte);
++
++        // Select PLL Set C
++        ucTempByte = INREG8(MGAREG_MEM_MISC_READ);
++        ucTempByte |= 0x3<<2; //select MGA pixel clock
++        OUTREG8(MGAREG_MEM_MISC_WRITE, ucTempByte);
++
++        ucPixCtrl |= MGA1064_PIX_CLK_CTL_CLK_POW_DOWN | 0x80;
++        outMGAdac(MGA1064_PIX_CLK_CTL, ucPixCtrl);
++
++        // Wait 500 us
++        usleep(500);
++
++        // Reset the PLL
++        //   When we are varying the output frequency by more than
++        //   10%, we must reset the PLL. However to be prudent, we
++        //   will reset it each time that we are changing it.
++        ucTempByte = inMGAdac(MGA1064_VREF_CTL);
++        ucTempByte &= ~0x04;
++        outMGAdac(MGA1064_VREF_CTL, ucTempByte );
++
++        // Wait 50 us
++        usleep(50);
++
++        // Program the Pixel PLL Register
++        outMGAdac(MGA1064_WB_PIX_PLLC_N, mgaReg->PllN);
++        outMGAdac(MGA1064_WB_PIX_PLLC_M, mgaReg->PllM);
++        outMGAdac(MGA1064_WB_PIX_PLLC_P, mgaReg->PllP);
++
++        // Wait 50 us
++        usleep(50);
++
++        // Turning the PLL on
++        ucTempByte = inMGAdac(MGA1064_VREF_CTL);
++        ucTempByte |= 0x04;
++        outMGAdac(MGA1064_VREF_CTL, ucTempByte );
++
++        // Wait 500 us
++        usleep(500);
++
++        // Select the pixel PLL by setting pixclksel to 1
++        ucTempByte = inMGAdac(MGA1064_PIX_CLK_CTL);
++        ucTempByte &= ~MGA1064_PIX_CLK_CTL_SEL_MSK;
++        ucTempByte |= MGA1064_PIX_CLK_CTL_SEL_PLL;
++        outMGAdac(MGA1064_PIX_CLK_CTL, ucTempByte);
++
++        ucTempByte = inMGAdac(MGA1064_REMHEADCTL);
++        ucTempByte &= ~MGA1064_REMHEADCTL_CLKSL_MSK;
++        ucTempByte |= MGA1064_REMHEADCTL_CLKSL_PLL;
++        outMGAdac(MGA1064_REMHEADCTL, ucTempByte);
++
++        // Reset dotclock rate bit.
++        OUTREG8(MGAREG_SEQ_INDEX, 1);
++        ucTempByte = INREG8(MGAREG_SEQ_DATA);
++        OUTREG8(MGAREG_SEQ_DATA, ucTempByte & ~0x8);
++
++        // Set pixclkdis to 0
++        ucTempByte = inMGAdac(MGA1064_PIX_CLK_CTL);
++        ucTempByte &= ~MGA1064_PIX_CLK_CTL_CLK_DIS;
++        outMGAdac(MGA1064_PIX_CLK_CTL, ucTempByte);
++
++        // Poll VCount. If it increments twice inside 150us,
++        // we assume that the PLL has locked.
++        ulLoopCount = 0;
++        ulVCount = INREG(MGAREG_VCOUNT);
++
++        while(ulLoopCount < 30 && ucPLLLocked == FALSE)
++        {
++            ulTempCount = INREG(MGAREG_VCOUNT);
++
++            if(ulTempCount < ulVCount)
++            {
++                ulVCount = 0;
++            }
++            if ((ucTempByte - ulVCount) > 2)
++            {
++                ucPLLLocked = TRUE;
++            }
++            else
++            {
++                usleep(5);
++            }
++            ulLoopCount++;
++        }
++        ulLockCheckIterations++;
++    }
++
++    // Set remclkdis to 0
++    ucTempByte = inMGAdac(MGA1064_REMHEADCTL);
++    ucTempByte &= ~MGA1064_REMHEADCTL_CLKDIS;
++    outMGAdac(MGA1064_REMHEADCTL, ucTempByte);
++}
++
++static void
++MGAG200ERPIXPLLSET(ScrnInfoPtr pScrn, MgaCrtcStatePtr mgaReg)
++{
++    //TODO  G200ER Validate sequence
++    CARD8 ucPixCtrl, ucTempByte;
++    MGAPtr pMga = MGAPTR(pScrn);
++
++
++    // Set pixclkdis to 1
++    ucPixCtrl = inMGAdac(MGA1064_PIX_CLK_CTL);
++    ucPixCtrl |= MGA1064_PIX_CLK_CTL_CLK_DIS;
++    outMGAdac(MGA1064_PIX_CLK_CTL, ucPixCtrl);
++
++    ucTempByte = inMGAdac(MGA1064_REMHEADCTL);
++    ucTempByte |= MGA1064_REMHEADCTL_CLKDIS;
++    outMGAdac(MGA1064_REMHEADCTL, ucTempByte);
++
++    // Select PLL Set C
++    ucTempByte = INREG8(MGAREG_MEM_MISC_READ);
++    ucTempByte |= (0x3<<2) | 0xc0; //select MGA pixel clock
++    OUTREG8(MGAREG_MEM_MISC_WRITE, ucTempByte);
++
++    ucPixCtrl &= ~MGA1064_PIX_CLK_CTL_CLK_DIS;
++    ucPixCtrl |= MGA1064_PIX_CLK_CTL_CLK_POW_DOWN;
++    outMGAdac(MGA1064_PIX_CLK_CTL, ucPixCtrl);
++
++    // Wait 500 us
++    usleep(500);
++
++    // Program the Pixel PLL Register
++    outMGAdac(MGA1064_ER_PIX_PLLC_N, mgaReg->PllN);
++    outMGAdac(MGA1064_ER_PIX_PLLC_M, mgaReg->PllM);
++    outMGAdac(MGA1064_ER_PIX_PLLC_P, mgaReg->PllP);
++
++        // Wait 50 us
++    usleep(50);
++
++}
++
++static void
++MGAG200EHPIXPLLSET(ScrnInfoPtr pScrn, MgaCrtcStatePtr mgaReg)
++{
++    MGAPtr pMga = MGAPTR(pScrn);
++
++    unsigned long ulFallBackCounter, ulLoopCount, ulLockCheckIterations = 0, ulTempCount, ulVCount;
++    unsigned char ucTempByte, ucPixCtrl, ucPLLLocked = FALSE;
++    unsigned char ucM;
++    unsigned char ucN;
++    unsigned char ucP;
++    unsigned char ucS;
++
++    while(ulLockCheckIterations <= 32 && ucPLLLocked == FALSE)
++    {
++        // Set pixclkdis to 1
++        ucPixCtrl = inMGAdac(MGA1064_PIX_CLK_CTL);
++        ucPixCtrl |= MGA1064_PIX_CLK_CTL_CLK_DIS;
++        outMGAdac(MGA1064_PIX_CLK_CTL, ucPixCtrl);
++
++        // Select PLL Set C
++        ucTempByte = INREG8(MGAREG_MEM_MISC_READ);
++        ucTempByte |= 0x3<<2; //select MGA pixel clock
++        OUTREG8(MGAREG_MEM_MISC_WRITE, ucTempByte);
++
++        ucPixCtrl |= MGA1064_PIX_CLK_CTL_CLK_POW_DOWN;
++        ucPixCtrl &= ~0x80;
++        outMGAdac(MGA1064_PIX_CLK_CTL, ucPixCtrl);
++
++        // Wait 500 us
++        usleep(500);
++
++        // Program the Pixel PLL Register
++        outMGAdac(MGA1064_EH_PIX_PLLC_N, mgaReg->PllN);
++        outMGAdac(MGA1064_EH_PIX_PLLC_M, mgaReg->PllM);
++        outMGAdac(MGA1064_EH_PIX_PLLC_P, mgaReg->PllP);
++
++        // Wait 500 us
++        usleep(500);
++
++        // Select the pixel PLL by setting pixclksel to 1
++        ucTempByte = inMGAdac(MGA1064_PIX_CLK_CTL);
++        ucTempByte &= ~MGA1064_PIX_CLK_CTL_SEL_MSK;
++        ucTempByte |= MGA1064_PIX_CLK_CTL_SEL_PLL;
++        outMGAdac(MGA1064_PIX_CLK_CTL, ucTempByte);
++
++        // Reset dotclock rate bit.
++        OUTREG8(MGAREG_SEQ_INDEX, 1);
++        ucTempByte = INREG8(MGAREG_SEQ_DATA);
++        OUTREG8(MGAREG_SEQ_DATA, ucTempByte & ~0x8);
++
++        // Set pixclkdis to 0 and pixplldn to 0
++        ucTempByte = inMGAdac(MGA1064_PIX_CLK_CTL);
++        ucTempByte &= ~MGA1064_PIX_CLK_CTL_CLK_DIS;
++        ucTempByte &= ~MGA1064_PIX_CLK_CTL_CLK_POW_DOWN;
++        outMGAdac(MGA1064_PIX_CLK_CTL, ucTempByte);
++
++        // Poll VCount. If it increments twice inside 150us,
++        // we assume that the PLL has locked.
++        ulLoopCount = 0;
++        ulVCount = INREG(MGAREG_VCOUNT);
++
++        while(ulLoopCount < 30 && ucPLLLocked == FALSE)
++        {
++            ulTempCount = INREG(MGAREG_VCOUNT);
++
++            if(ulTempCount < ulVCount)
++            {
++                ulVCount = 0;
++            }
++            if ((ucTempByte - ulVCount) > 2)
++            {
++                ucPLLLocked = TRUE;
++            }
++            else
++            {
++                usleep(5);
++            }
++            ulLoopCount++;
++        }
++        ulLockCheckIterations++;
++    }
++}
++
++
++static void crtc_dpms(xf86CrtcPtr crtc, int mode);
++static void crtc_save(xf86CrtcPtr crtc);
++static void crtc_restore(xf86CrtcPtr crtc);
++static Bool crtc_lock(xf86CrtcPtr crtc);
++static void crtc_unlock(xf86CrtcPtr crtc);
++static Bool crtc_mode_fixup(xf86CrtcPtr crtc, DisplayModePtr mode,
++                            DisplayModePtr adjusted_mode);
++static void crtc_prepare(xf86CrtcPtr crtc);
++static void crtc_mode_set(xf86CrtcPtr crtc, DisplayModePtr mode,
++                          DisplayModePtr adjusted_mode, int x, int y);
++static void crtc_commit(xf86CrtcPtr crtc);
++static void crtc_destroy(xf86CrtcPtr crtc);
++
++static const xf86CrtcFuncsRec crtc_funcs = {
++    .dpms = crtc_dpms,
++    .save = crtc_save,
++    .restore = crtc_restore,
++    .lock = crtc_lock,
++    .unlock = crtc_unlock,
++    .mode_fixup = crtc_mode_fixup,
++    .prepare = crtc_prepare,
++    .mode_set = crtc_mode_set,
++    .commit = crtc_commit,
++    .destroy = crtc_destroy
++};
++
++static void
++crtc_dpms(xf86CrtcPtr crtc, int mode)
++{
++}
++
++/*
++ * MGAGSetPCLK - Set the pixel (PCLK) clock.
++ */
++static void
++MGAGSetPCLK(xf86CrtcPtr crtc, MgaCrtcStatePtr state, long f_out)
++{
++    MGAPtr pMga = MGAPTR(crtc->scrn);
++
++    /* Pixel clock values */
++    int m, n, p;
++
++    state->clock = f_out;
++
++    if (MGAISGx50(pMga)) {
++        return;
++    }
++
++    if (pMga->is_G200SE) {
++        MGAG200SEComputePLLParam(f_out, &m, &n, &p);
++	/* the asymmetry here bugs me */
++	state->DacRegs[MGA1064_PIX_PLLC_M] = m;
++	state->DacRegs[MGA1064_PIX_PLLC_N] = n;
++	state->DacRegs[MGA1064_PIX_PLLC_P] = p;
++    } else {
++	if (pMga->is_G200EV) {
++	    MGAG200EVComputePLLParam(f_out, &m, &n, &p);
++	} else if (pMga->is_G200WB) {
++	    MGAG200WBComputePLLParam(f_out, &m, &n, &p);
++	} else if (pMga->is_G200EH) {
++	    MGAG200EHComputePLLParam(f_out, &m, &n, &p);
++	} else if (pMga->is_G200ER) {
++	    MGAG200ERComputePLLParam(f_out, &m, &n, &p);
++	}
++
++	state->PllM = m;
++	state->PllN = n;
++	state->PllP = p;
++    }
++}
++
++static void
++state_set(xf86CrtcPtr crtc, MgaCrtcStatePtr state,
++          DisplayModePtr mode, int x, int y)
++{
++    /*
++     * initial values of the DAC registers
++     */
++    const static unsigned char initDAC[] = {
++        /* 0x00: */	   0,    0,    0,    0,    0,    0, 0x00,    0,
++        /* 0x08: */	   0,    0,    0,    0,    0,    0,    0,    0,
++        /* 0x10: */	   0,    0,    0,    0,    0,    0,    0,    0,
++        /* 0x18: */	0x00,    0, 0xC9, 0xFF, 0xBF, 0x20, 0x1F, 0x20,
++        /* 0x20: */	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++        /* 0x28: */	0x00, 0x00, 0x00, 0x00,    0,    0,    0, 0x40,
++        /* 0x30: */	0x00, 0xB0, 0x00, 0xC2, 0x34, 0x14, 0x02, 0x83,
++        /* 0x38: */	0x00, 0x93, 0x00, 0x77, 0x00, 0x00, 0x00, 0x3A,
++        /* 0x40: */	   0,    0,    0,    0,    0,    0,    0,    0,
++        /* 0x48: */	   0,    0,    0,    0,    0,    0,    0,    0
++    };
++
++    int i;
++    int hd, hs, he, ht, vd, vs, ve, vt, wd;
++    int BppShift;
++    MGAPtr pMga = MGAPTR(crtc->scrn);
++    vgaRegPtr vga = &VGAHWPTR(crtc->scrn)->ModeReg;
++    unsigned int startadd = (y * crtc->scrn->virtualX) + x;
++
++    BppShift = pMga->BppShifts[(crtc->scrn->bitsPerPixel >> 3) - 1];
++
++    for (i = 0; i < sizeof(state->DacRegs); i++)
++        state->DacRegs[i] = initDAC[i];
++
++    switch (pMga->Chipset) {
++    case PCI_CHIP_MGAG200_SE_A_PCI:
++    case PCI_CHIP_MGAG200_SE_B_PCI:
++        state->DacRegs[MGA1064_VREF_CTL] = 0x03;
++        state->DacRegs[MGA1064_PIX_CLK_CTL] =
++            MGA1064_PIX_CLK_CTL_SEL_PLL;
++
++        state->DacRegs[MGA1064_MISC_CTL] =
++            MGA1064_MISC_CTL_DAC_EN |
++            MGA1064_MISC_CTL_VGA8 |
++            MGA1064_MISC_CTL_DAC_RAM_CS;
++
++        if (pMga->HasSDRAM)
++            state->Option = 0x40049120;
++
++        state->Option2 = 0x00008000;
++        break;
++
++    case PCI_CHIP_MGAG200_WINBOND_PCI:
++	state->DacRegs[MGA1064_VREF_CTL] = 0x07;
++	state->Option = 0x41049120;
++	state->Option2 = 0x0000b000;
++	break;
++
++    case PCI_CHIP_MGAG200_EV_PCI:
++	state->DacRegs[MGA1064_PIX_CLK_CTL] =
++	    MGA1064_PIX_CLK_CTL_SEL_PLL;
++
++	state->DacRegs[MGA1064_MISC_CTL] =
++	    MGA1064_MISC_CTL_VGA8 |
++	    MGA1064_MISC_CTL_DAC_RAM_CS;
++
++	state->Option = 0x00000120;
++	state->Option2 = 0x0000b000;
++	break;
++
++    case PCI_CHIP_MGAG200_ER_PCI:
++	state->Dac_Index90 = 0;
++	break;
++
++    case PCI_CHIP_MGAG200_EH_PCI:
++	state->DacRegs[MGA1064_MISC_CTL] =
++	    MGA1064_MISC_CTL_VGA8 |
++	    MGA1064_MISC_CTL_DAC_RAM_CS;
++
++	state->Option = 0x00000120;
++	state->Option2 = 0x0000b000;
++	break;
++
++    default:
++	xf86DrvMsg(crtc->scrn->scrnIndex, X_ERROR, "Oh dear\n");
++        break;
++    }
++
++    /* must always have the pci retries on but rely on
++       polling to keep them from occuring */
++    state->Option &= ~0x20000000;
++
++    switch (crtc->scrn->bitsPerPixel) {
++    case 8:
++        state->DacRegs[MGA1064_MUL_CTL] = MGA1064_MUL_CTL_8bits;
++        startadd /= 8;
++        break;
++    case 16:
++        state->DacRegs[MGA1064_MUL_CTL] = MGA1064_MUL_CTL_16bits;
++
++        if ((crtc->scrn->weight.red == 5) && (crtc->scrn->weight.green == 5)
++            && (crtc->scrn->weight.blue == 5)) {
++            state->DacRegs[MGA1064_MUL_CTL] = MGA1064_MUL_CTL_15bits;
++        }
++
++        startadd /= 4;
++        break;
++    case 24:
++        state->DacRegs[MGA1064_MUL_CTL] = MGA1064_MUL_CTL_24bits;
++        startadd /= 8;
++        break;
++    case 32:
++	state->DacRegs[MGA1064_MUL_CTL] = MGA1064_MUL_CTL_32_24bits;
++
++        startadd /= 2;
++        break;
++    default:
++        FatalError("MGA: unsupported depth\n");
++    }
++
++    /* we only have 20 bits to store the start address */
++    startadd &= 0xfffff;
++
++    /*
++     * This will initialize all of the generic VGA registers.
++     */
++    if (!vgaHWInit(crtc->scrn, mode)) {
++        ErrorF("oh noes, vgahwinit failed\n");
++        return;
++    }
++
++    /*
++     * Here all of the MGA registers get filled in.
++     */
++    hd = (mode->CrtcHDisplay >> 3) - 1;
++    hs = (mode->CrtcHSyncStart >> 3) - 1;
++    he = (mode->CrtcHSyncEnd >> 3) - 1;
++    ht = (mode->CrtcHTotal >> 3) - 1;
++    vd = mode->CrtcVDisplay - 1;
++    vs = mode->CrtcVSyncStart - 1;
++    ve = mode->CrtcVSyncEnd - 1;
++    vt = mode->CrtcVTotal - 2;
++
++    /* HTOTAL & 0x7 equal to 0x6 in 8bpp or 0x4 in 24bpp causes strange
++     * vertical stripes
++     */
++    if ((ht & 0x07) == 0x06 || (ht & 0x07) == 0x04)
++        ht++;
++
++    if (crtc->scrn->bitsPerPixel == 24)
++        wd = (mode->CrtcHDisplay * 3) >> (4 - BppShift);
++    else
++	wd = mode->CrtcHDisplay >> (4 - BppShift);
++
++    state->ExtVga[0] = 0;
++    state->ExtVga[5] = 0;
++
++    if (mode->Flags & V_INTERLACE) {
++        state->ExtVga[0] = 0x80;
++        state->ExtVga[5] = (hs + he - ht) >> 1;
++        wd <<= 1;
++        vt &= 0xFFFE;
++    }
++
++    state->ExtVga[0] |= (wd & 0x300) >> 4;
++    state->ExtVga[0] |= (startadd >> 16) & 0x0f;
++
++    state->ExtVga[1] = (((ht - 4) & 0x100) >> 8) |
++                       ((hd & 0x100) >> 7) |
++                       ((hs & 0x100) >> 6) |
++                       (ht & 0x40);
++    state->ExtVga[2] = ((vt & 0xc00) >> 10) |
++                       ((vd & 0x400) >> 8) |
++                       ((vd & 0xc00) >> 7) |
++                       ((vs & 0xc00) >> 5) |
++                       ((vd & 0x400) >> 3); /* linecomp */
++
++    if (crtc->scrn->bitsPerPixel == 24)
++        state->ExtVga[3] = (((1 << BppShift) * 3) - 1) | 0x80;
++    else
++        state->ExtVga[3] = ((1 << BppShift) - 1) | 0x80;
++
++    state->ExtVga[4] = 0;
++
++    if (pMga->is_G200WB){
++	state->ExtVga[1] |= 0x88;
++    }
++    state->ExtVga_Index24 = 0x05;
++
++    vga->CRTC[0] = ht - 4;
++    vga->CRTC[1] = hd;
++    vga->CRTC[2] = hd;
++    vga->CRTC[3] = (ht & 0x1F) | 0x80;
++    vga->CRTC[4] = hs;
++    vga->CRTC[5] = ((ht & 0x20) << 2) | (he & 0x1F);
++    vga->CRTC[6] = vt & 0xFF;
++    vga->CRTC[7] = ((vt & 0x100) >> 8 ) |
++                   ((vd & 0x100) >> 7 ) |
++                   ((vs & 0x100) >> 6 ) |
++                   ((vd & 0x100) >> 5 ) |
++                   ((vd & 0x100) >> 4 ) | /* linecomp */
++                   ((vt & 0x200) >> 4 ) |
++                   ((vd & 0x200) >> 3 ) |
++                   ((vs & 0x200) >> 2 );
++    vga->CRTC[9] = ((vd & 0x200) >> 4) |
++                   ((vd & 0x200) >> 3); /* linecomp */
++
++    vga->CRTC[12] = (startadd & 0xff00) >> 8;
++    vga->CRTC[13] = startadd & 0xff;
++
++    vga->CRTC[16] = vs & 0xFF;
++    vga->CRTC[17] = (ve & 0x0F) | 0x20;
++    vga->CRTC[18] = vd & 0xFF;
++    vga->CRTC[19] = wd & 0xFF;
++    vga->CRTC[21] = vd & 0xFF;
++    vga->CRTC[22] = (vt + 1) & 0xFF;
++    vga->CRTC[24] = vd & 0xFF; /* linecomp */
++
++    state->DacRegs[MGA1064_CURSOR_BASE_ADR_LOW] = pMga->FbCursorOffset >> 10;
++    state->DacRegs[MGA1064_CURSOR_BASE_ADR_HI] = pMga->FbCursorOffset >> 18;
++
++    if (pMga->SyncOnGreen) {
++        state->DacRegs[MGA1064_GEN_CTL] &=
++            ~MGA1064_GEN_CTL_SYNC_ON_GREEN_DIS;
++
++        state->ExtVga[3] |= 0x40;
++    }
++
++    /* select external clock */
++    vga->MiscOutReg |= 0x0C;
++
++    if (mode->Flags & V_DBLSCAN)
++        vga->CRTC[9] |= 0x80;
++
++    if (MGAISGx50(pMga)) {
++        OUTREG(MGAREG_ZORG, 0);
++    }
++
++    MGAGSetPCLK(crtc, state, mode->Clock);
++
++    /* This disables the VGA memory aperture */
++    vga->MiscOutReg &= ~0x02;
++
++#if X_BYTE_ORDER == X_BIG_ENDIAN
++    /* Disable byte-swapping for big-endian architectures - the XFree
++       driver seems to like a little-endian framebuffer -ReneR */
++    /* state->Option |= 0x80000000; */
++    state->Option &= ~0x80000000;
++#endif
++}
++
++/*
++ * This function restores a video mode. It basically writes out all of
++ * the registers that have previously been saved in the MgaCrtcStateRec
++ * data structure.
++ */
++static void
++state_restore(xf86CrtcPtr crtc, MgaCrtcStatePtr state,
++              vgaRegPtr vga, int vga_flags)
++{
++    ScrnInfoPtr scrn = crtc->scrn;
++    MGAPtr pMga = MGAPTR(scrn);
++    CARD32 optionMask;
++    int i;
++
++    if (pMga->is_G200WB)
++	MGAG200WBPrepareForModeSwitch(scrn);
++
++    /*
++     * Pixel Clock needs to be restored regardless if we use
++     * HALLib or not. HALlib doesn't do a good job restoring
++     * VESA modes. MATROX: hint, hint.
++     *
++     * FIXME: This seems weird. Verify.
++     */
++    if (MGAISGx50(pMga) && state->clock) {
++        MGAG450SetPLLFreq(scrn, state->clock);
++        state->PIXPLLCSaved = FALSE;
++    }
++
++    /* Do not set the memory config for primary cards as it
++       should be correct already. Only on little endian architectures
++       since we need to modify the byteswap bit. -ReneR */
++#if X_BYTE_ORDER == X_BIG_ENDIAN
++    optionMask = OPTION1_MASK;
++#else
++    optionMask = (pMga->Primary) ? OPTION1_MASK_PRIMARY : OPTION1_MASK;
++#endif
++
++    /*
++     * Code is needed to get things back to bank zero.
++     */
++
++    /* restore DAC registers
++     * according to the docs we shouldn't write to reserved regs
++     */
++    for (i = 0; i < sizeof(state->DacRegs); i++) {
++        if ((i <= 0x03) ||
++                (i == 0x07) ||
++                (i == 0x0b) ||
++                (i == 0x0f) ||
++                ((i >= 0x13) && (i <= 0x17)) ||
++                (i == 0x1b) ||
++                (i == 0x1c) ||
++                ((i >= 0x1f) && (i <= 0x29)) ||
++                ((i >= 0x30) && (i <= 0x37)) ||
++                (MGAISGx50(pMga) && !state->PIXPLLCSaved &&
++                 ((i == 0x2c) || (i == 0x2d) || (i == 0x2e) ||
++                  (i == 0x4c) || (i == 0x4d) || (i == 0x4e))))
++            continue;
++        if (pMga->is_G200SE
++                && ((i == 0x2C) || (i == 0x2D) || (i == 0x2E)))
++            continue;
++	if ((pMga->is_G200EV || pMga->is_G200WB || pMga->is_G200EH) &&
++	    (i >= 0x44) && (i <= 0x4E))
++	    continue;
++
++        outMGAdac(i, state->DacRegs[i]);
++    }
++
++    if (pMga->is_G200ER)
++	outMGAdac(0x90, state->Dac_Index90);
++
++    if (!MGAISGx50(pMga)) {
++        /* restore pci_option register */
++#ifdef XSERVER_LIBPCIACCESS
++        pci_device_cfg_write_bits(pMga->PciInfo, optionMask,
++                                  state->Option, PCI_OPTION_REG);
++
++        if (pMga->Chipset != PCI_CHIP_MGA1064)
++            pci_device_cfg_write_bits(pMga->PciInfo, OPTION2_MASK,
++                                      state->Option2, PCI_MGA_OPTION2);
++
++        if (pMga->Chipset == PCI_CHIP_MGAG400 || pMga->Chipset == PCI_CHIP_MGAG550)
++            pci_device_cfg_write_bits(pMga->PciInfo, OPTION3_MASK,
++                                      state->Option3, PCI_MGA_OPTION3);
++#else
++        pciSetBitsLong(pMga->PciTag, PCI_OPTION_REG, optionMask,
++                       state->Option);
++
++        if (pMga->Chipset != PCI_CHIP_MGA1064)
++            pciSetBitsLong(pMga->PciTag, PCI_MGA_OPTION2, OPTION2_MASK,
++                           state->Option2);
++
++        if (pMga->Chipset == PCI_CHIP_MGAG400 || pMga->Chipset == PCI_CHIP_MGAG550)
++            pciSetBitsLong(pMga->PciTag, PCI_MGA_OPTION3, OPTION3_MASK,
++                           state->Option3);
++#endif
++    }
++
++    if (pMga->is_G200ER) {
++       MGAG200ERPIXPLLSET(scrn, state);
++    } else  if (pMga->is_G200EV) {
++       MGAG200EVPIXPLLSET(scrn, state);
++    } else if (pMga->is_G200WB) {
++       MGAG200WBPIXPLLSET(scrn, state);
++    } else if (pMga->is_G200EH) {
++       MGAG200EHPIXPLLSET(scrn, state);
++    }
++
++    /* restore CRTCEXT regs */
++    for (i = 0; i < 6; i++)
++        OUTREG16(MGAREG_CRTCEXT_INDEX, (state->ExtVga[i] << 8) | i);
++
++    if (pMga->is_G200ER) {
++	OUTREG8(MGAREG_CRTCEXT_INDEX, 0x24);
++	OUTREG8(MGAREG_CRTCEXT_DATA,  state->ExtVga_Index24);
++    }
++
++    /* This handles restoring the generic VGA registers. */
++    if (pMga->is_G200SE) {
++        MGAG200SERestoreMode(scrn, vga);
++
++        if (vga_flags & VGA_SR_FONTS)
++            MGAG200SERestoreFonts(scrn, vga);
++
++	/*
++	 This function optimize the Priority Request control
++	 Higher HiPriLvl will reduce drawing performance
++	 We need to give enough bandwith to crtc to avoid visual artifact
++	*/
++        if (pMga->reg_1e24 >= 0x02)
++        {
++            /* Calulate CRTC Priority value */
++            CARD8  ucHiPriLvl;
++            CARD32 ulBitsPerPixel;
++            CARD32 ulMemoryBandwidth;
++
++            /* uiBitsPerPixel can only be 8,16 or32 */
++            if (scrn->bitsPerPixel > 16)
++            {
++                ulBitsPerPixel = 32;
++            }
++            else if (scrn->bitsPerPixel >  8)
++            {
++                ulBitsPerPixel = 16;
++            }
++            else
++            {
++                ulBitsPerPixel = 8;
++            }
++
++            ulMemoryBandwidth = (state->clock * ulBitsPerPixel) / 1000;
++
++            if      (ulMemoryBandwidth    > 3100)  ucHiPriLvl = 0;
++            else if (ulMemoryBandwidth    > 2600)  ucHiPriLvl = 1;
++            else if (ulMemoryBandwidth    > 1900)  ucHiPriLvl = 2;
++            else if (ulMemoryBandwidth    > 1160)  ucHiPriLvl = 3;
++            else if (ulMemoryBandwidth    > 440)   ucHiPriLvl = 4;
++            else ucHiPriLvl = 5;
++
++            OUTREG8(0x1FDE, 0x06);
++		    OUTREG8(0x1FDF, ucHiPriLvl);
++
++            xf86DrvMsg(scrn->scrnIndex, X_INFO, "Clock           == %d\n",   state->clock);
++            xf86DrvMsg(scrn->scrnIndex, X_INFO, "BitsPerPixel    == %d\n",   scrn->bitsPerPixel);
++            xf86DrvMsg(scrn->scrnIndex, X_INFO, "MemoryBandwidth == %d\n",   ulMemoryBandwidth);
++            xf86DrvMsg(scrn->scrnIndex, X_INFO, "HiPriLvl        == %02X\n", ucHiPriLvl);
++        }
++        else
++        {
++                xf86DrvMsg(scrn->scrnIndex, X_INFO, "Clock           == %d\n",   state->clock);
++                xf86DrvMsg(scrn->scrnIndex, X_INFO, "BitsPerPixel    == %d\n",   scrn->bitsPerPixel);
++                OUTREG8(0x1FDE, 0x06);
++		if (pMga->reg_1e24 >= 0x01)
++                {
++		            OUTREG8(0x1FDF, 0x03);
++                    xf86DrvMsg(scrn->scrnIndex, X_INFO, "HiPriLvl        == 03\n");
++                }
++		else
++                {
++		            OUTREG8(0x1FDF, 0x14);
++                    xf86DrvMsg(scrn->scrnIndex, X_INFO, "HiPriLvl        == 14h\n");
++                }
++        }
++    } else
++        vgaHWRestore(scrn, vga, vga_flags & ~VGA_SR_CMAP);
++
++    if (vga_flags & VGA_SR_CMAP)
++        MGAGRestorePalette(scrn, vga->DAC);
++
++    if (pMga->is_G200EV) {
++	OUTREG16(MGAREG_CRTCEXT_INDEX, 6);
++	OUTREG16(MGAREG_CRTCEXT_DATA, 0);
++    }
++
++    /*
++     * this is needed to properly restore start address
++     */
++    OUTREG16(MGAREG_CRTCEXT_INDEX, (state->ExtVga[0] << 8) | 0);
++
++    if (pMga->is_G200WB)
++	MGAG200WBRestoreFromModeSwitch(scrn);
++
++#if 1
++    ErrorF("Setting DAC:");
++    for (i = 0; i < sizeof(state->DacRegs); i++) {
++#if 1
++        if(!(i%16)) ErrorF("\n%02X: ",i);
++        ErrorF("%02X ", state->DacRegs[i]);
++#else
++        if(!(i%8)) ErrorF("\n%02X: ",i);
++        ErrorF("0x%02X, ", state->DacRegs[i]);
++#endif
++    }
++    ErrorF("\nOPTION  = %08lX\n", state->Option);
++    ErrorF("OPTION2 = %08lX\n", state->Option2);
++    ErrorF("CRTCEXT:");
++    for (i=0; i<6; i++) ErrorF(" %02X", state->ExtVga[i]);
++    ErrorF("\n");
++#endif
++}
++
++static void
++state_save(xf86CrtcPtr crtc, MgaCrtcStatePtr state, int vga_flags)
++{
++    ScrnInfoPtr scrn = crtc->scrn;
++    MGAPtr pMga = MGAPTR(scrn);
++    vgaRegPtr vga = &VGAHWPTR(scrn)->SavedReg;
++    int i;
++
++    if (MGAISGx50(pMga))
++        state->clock = MGAG450SavePLLFreq(scrn);
++
++    /*
++     * Code is needed to get back to bank zero.
++     */
++    OUTREG16(MGAREG_CRTCEXT_INDEX, 0x0004);
++
++    /*
++     * This function will handle creating the data structure and filling
++     * in the generic VGA portion.
++     */
++    if (pMga->is_G200SE) {
++        MGAG200SESaveMode(scrn, vga);
++
++        if (vga_flags & VGA_SR_FONTS)
++            MGAG200SESaveFonts(scrn, vga);
++    } else
++        vgaHWSave(scrn, vga, vga_flags);
++
++    MGAGSavePalette(scrn, vga->DAC);
++
++    /*
++     * The port I/O code necessary to read in the extended registers.
++     */
++    for (i = 0; i < sizeof(state->DacRegs); i++)
++        state->DacRegs[i] = inMGAdac(i);
++
++    if (pMga->is_G200WB) {
++	state->PllM = inMGAdac(MGA1064_WB_PIX_PLLC_M);
++	state->PllN = inMGAdac(MGA1064_WB_PIX_PLLC_N);
++	state->PllP = inMGAdac(MGA1064_WB_PIX_PLLC_P);
++    } else if (pMga->is_G200EV) {
++	state->PllM = inMGAdac(MGA1064_EV_PIX_PLLC_M);
++	state->PllN = inMGAdac(MGA1064_EV_PIX_PLLC_N);
++	state->PllP = inMGAdac(MGA1064_EV_PIX_PLLC_P);
++    } else if (pMga->is_G200EH) {
++	state->PllM = inMGAdac(MGA1064_EH_PIX_PLLC_M);
++	state->PllN = inMGAdac(MGA1064_EH_PIX_PLLC_N);
++	state->PllP = inMGAdac(MGA1064_EH_PIX_PLLC_P);
++    } else if (pMga->is_G200ER) {
++	state->PllM = inMGAdac(MGA1064_ER_PIX_PLLC_M);
++	state->PllN = inMGAdac(MGA1064_ER_PIX_PLLC_N);
++	state->PllP = inMGAdac(MGA1064_ER_PIX_PLLC_P);
++	state->Dac_Index90 = inMGAdac(0x90);
++    }
++
++    state->PIXPLLCSaved = TRUE;
++
++#ifdef XSERVER_LIBPCIACCESS
++    pci_device_cfg_read_u32(pMga->PciInfo, &state->Option,
++                            PCI_OPTION_REG);
++    pci_device_cfg_read_u32(pMga->PciInfo, &state->Option2,
++                            PCI_MGA_OPTION2);
++
++    if (pMga->Chipset == PCI_CHIP_MGAG400 || pMga->Chipset == PCI_CHIP_MGAG550)
++        pci_device_cfg_read_u32(pMga->PciInfo, &state->Option3,
++                                PCI_MGA_OPTION3);
++#else
++    state->Option = pciReadLong(pMga->PciTag, PCI_OPTION_REG);
++    state->Option2 = pciReadLong(pMga->PciTag, PCI_MGA_OPTION2);
++
++    if (pMga->Chipset == PCI_CHIP_MGAG400 || pMga->Chipset == PCI_CHIP_MGAG550)
++        state->Option3 = pciReadLong(pMga->PciTag, PCI_MGA_OPTION3);
++#endif
++
++    for (i = 0; i < 6; i++) {
++        OUTREG8(MGAREG_CRTCEXT_INDEX, i);
++        state->ExtVga[i] = INREG8(MGAREG_CRTCEXT_DATA);
++    }
++    if (pMga->is_G200ER)
++    {
++	OUTREG8(MGAREG_CRTCEXT_INDEX, 0x24);
++	state->ExtVga_Index24 = INREG8(MGAREG_CRTCEXT_DATA);
++    }
++
++#ifdef DEBUG
++    ErrorF("Saved values:\nDAC:");
++    for (i = 0; i < sizeof(state->DacRegs); i++) {
++#if 1
++        if(!(i%16)) ErrorF("\n%02X: ",i);
++        ErrorF("%02X ", state->DacRegs[i]);
++#else
++        if(!(i%8)) ErrorF("\n%02X: ",i);
++        ErrorF("0x%02X, ", state->DacRegs[i]);
++#endif
++    }
++
++    ErrorF("\nOPTION  = %08lX\n:", state->Option);
++    ErrorF("OPTION2 = %08lX\nCRTCEXT:", state->Option2);
++
++    for (i=0; i<6; i++) ErrorF(" %02X", state->ExtVga[i]);
++        ErrorF("\n");
++#endif
++}
++
++static void
++crtc_save(xf86CrtcPtr crtc)
++{
++    MgaCrtcDataPtr data = MGACRTCDATAPTR(crtc);
++    MGAPtr pMga = MGAPTR(crtc->scrn);
++    int vga_flags = VGA_SR_MODE;
++
++    if (pMga->Primary)
++        vga_flags |= VGA_SR_FONTS;
++
++    state_save(crtc, &data->saved_state, vga_flags);
++}
++
++static void
++crtc_restore(xf86CrtcPtr crtc)
++{
++    MgaCrtcDataPtr data = MGACRTCDATAPTR(crtc);
++    MGAPtr pMga = MGAPTR(crtc->scrn);
++    vgaHWPtr vga = VGAHWPTR(crtc->scrn);
++    int vga_flags = VGA_SR_MODE | VGA_SR_CMAP;
++
++    if (pMga->Primary)
++        vga_flags |= VGA_SR_FONTS;
++
++    state_restore(crtc, &data->saved_state, &vga->SavedReg, vga_flags);
++}
++
++static Bool
++crtc_lock(xf86CrtcPtr crtc)
++{
++    /* XXX this would need DRI support */
++    return FALSE;
++}
++
++static void
++crtc_unlock(xf86CrtcPtr crtc)
++{
++    /* XXX this would need DRI support */
++}
++
++static Bool
++crtc_mode_fixup(xf86CrtcPtr crtc, DisplayModePtr mode,
++                DisplayModePtr adjusted_mode)
++{
++    return TRUE;
++}
++
++static void
++crtc_prepare(xf86CrtcPtr crtc)
++{
++    crtc->funcs->dpms(crtc, DPMSModeOff);
++}
++
++static void
++crtc_mode_set(xf86CrtcPtr crtc, DisplayModePtr mode,
++              DisplayModePtr adjust_mode, int x, int y)
++{
++    MgaCrtcStateRec state;
++    vgaHWPtr vga = VGAHWPTR(crtc->scrn);
++
++    memset(&state, 0, sizeof (state));
++
++    state_set(crtc, &state, mode, x, y);
++    state_restore(crtc, &state, &vga->ModeReg, VGA_SR_MODE);
++}
++
++static void
++crtc_commit(xf86CrtcPtr crtc)
++{
++    crtc->funcs->dpms(crtc, DPMSModeOn);
++}
++
++static void
++crtc_destroy(xf86CrtcPtr crtc)
++{
++    free(crtc->driver_private);
++}
++
++Bool
++MGAGCrtc1Init(ScrnInfoPtr scrn)
++{
++    xf86CrtcPtr crtc;
++    MgaCrtcDataPtr data;
++
++    data = xnfcalloc (sizeof (MgaCrtcDataRec), 1);
++    if (!data)
++        return FALSE;
++
++    crtc = xf86CrtcCreate (scrn, &crtc_funcs);
++    if (!crtc) {
++        free(data);
++        return FALSE;
++    }
++
++    crtc->driver_private = data;
++
++    return TRUE;
++}
+diff --git a/src/mga_g_output.c b/src/mga_g_output.c
+new file mode 100644
+index 0000000..f66afa8
+--- /dev/null
++++ b/src/mga_g_output.c
+@@ -0,0 +1,272 @@
++/*
++ * Copyright 2007 Tilman Sauerbeck
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software")
++ * to deal in the software without restriction, including without limitation
++ * on the rights to use, copy, modify, merge, publish, distribute, sub
++ * license, and/or sell copies of the Software, and to permit persons to whom
++ * them Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice (including the next
++ * paragraph) shall be included in all copies or substantial portions of the
++ * Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTIBILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER
++ * IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF OR IN
++ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ *
++ * Authors:
++ *    Tilman Sauerbeck <tilman@code-monkey.de>
++ *
++ * Sources:
++ *    xf86-video-intel
++ */
++
++#ifdef HAVE_CONFIG_H
++# include "config.h"
++#endif
++
++#include "xf86.h"
++
++#include "mga_reg.h"
++#include "mga.h"
++#include "mga_randr.h"
++#include "vbe.h"
++
++#define MGAOUTPUTDATAPTR(p) ((MgaOutputDataPtr) ((p)->driver_private))
++
++typedef struct {
++    I2CBusPtr ddc_bus;
++} MgaOutputDataRec, *MgaOutputDataPtr;
++
++static void output_dac1_dpms(xf86OutputPtr output, int mode);
++static void output_save(xf86OutputPtr output);
++static void output_restore(xf86OutputPtr output);
++static int output_mode_valid(xf86OutputPtr output, DisplayModePtr mode);
++static Bool output_mode_fixup(xf86OutputPtr output, DisplayModePtr mode,
++                              DisplayModePtr adjusted_mode);
++static void output_prepare(xf86OutputPtr output);
++static void output_mode_set(xf86OutputPtr output, DisplayModePtr mode,
++                            DisplayModePtr adjusted_mode);
++static void output_commit(xf86OutputPtr output);
++static xf86OutputStatus output_detect(xf86OutputPtr output);
++static DisplayModePtr output_get_modes(xf86OutputPtr output);
++static void output_destroy(xf86OutputPtr output);
++
++static const xf86OutputFuncsRec output_dac1_funcs = {
++    .dpms = output_dac1_dpms,
++    .save = output_save,
++    .restore = output_restore,
++    .mode_valid = output_mode_valid,
++    .mode_fixup = output_mode_fixup,
++    .prepare = output_prepare,
++    .mode_set = output_mode_set,
++    .commit = output_commit,
++    .detect = output_detect,
++    .get_modes = output_get_modes,
++    .destroy = output_destroy
++};
++
++/* enable/disable primary output. */
++static void
++output1_dpms(xf86OutputPtr output, int mode)
++{
++    MGAPtr pMga = MGAPTR(output->scrn);
++    CARD8 misc_ctl, disp_ctl, mask;
++
++    misc_ctl = inMGAdac(MGA1064_MISC_CTL);
++    mask = MGA1064_MISC_CTL_DAC_EN;
++
++    if (mode == DPMSModeOn)
++        outMGAdac(MGA1064_MISC_CTL, misc_ctl | mask);
++    else
++        outMGAdac(MGA1064_MISC_CTL, misc_ctl & ~mask);
++
++    disp_ctl = inMGAdac(MGA1064_DISP_CTL);
++    mask = MGA1064_DISP_CTL_DAC1OUTSEL_EN;
++
++    if (mode == DPMSModeOn)
++        outMGAdac(MGA1064_DISP_CTL, disp_ctl | mask);
++    else
++        outMGAdac(MGA1064_DISP_CTL, disp_ctl & ~mask);
++}
++
++static void
++output_dac1_dpms(xf86OutputPtr output, int mode)
++{
++    /* XXX
++     * . Prefer an implementation that doesn't depend on VGA specifics.
++     *
++     * . This will only work for the primary output or maybe only for
++     *   CRTC1?
++     */
++
++    MGAPtr pMga = MGAPTR(output->scrn);
++
++#if 0
++    CARD8 val, seq1, crtcext1;
++
++    OUTREG8(MGAREG_SEQ_INDEX, 0x01); /* Select SEQ1 */
++    OUTREG8(MGAREG_CRTCEXT_INDEX, 0x01); /* Select CRTCEXT1 */
++
++    seq1 = INREG8(MGAREG_SEQ_DATA);
++    seq1 &= ~MGAREG_SEQ1_SCREEN_OFF;
++
++    crtcext1 = INREG8(MGAREG_CRTCEXT_DATA);
++    crtcext1 &= ~MGAREG_CRTCEXT1_HSYNC_OFF;
++    crtcext1 &= ~MGAREG_CRTCEXT1_VSYNC_OFF;
++
++    switch (mode) {
++    case DPMSModeOn:
++        /* nothing to do */
++        break;
++    case DPMSModeStandby:
++        seq1 |= MGAREG_SEQ1_SCREEN_OFF;
++        crtcext1 = MGAREG_CRTCEXT1_HSYNC_OFF;
++        break;
++    case DPMSModeSuspend:
++        seq1 |= MGAREG_SEQ1_SCREEN_OFF;
++        crtcext1 |= MGAREG_CRTCEXT1_VSYNC_OFF;
++        break;
++    case DPMSModeOff:
++        seq1 |= MGAREG_SEQ1_SCREEN_OFF;
++        crtcext1 |= MGAREG_CRTCEXT1_HSYNC_OFF;
++        crtcext1 |= MGAREG_CRTCEXT1_VSYNC_OFF;
++        break;
++    }
++
++    MGAWAITVSYNC();
++    MGAWAITBUSY();
++
++    OUTREG8(MGAREG_SEQ_DATA, seq1);
++
++    usleep(20000);
++
++    OUTREG8(MGAREG_CRTCEXT_DATA, crtcext1);
++#endif
++
++#if 0
++    /* this is wrong on at least EV and EH */
++    output1_dpms(output, mode);
++#endif
++
++    MGADisplayPowerManagementSet(output->scrn, mode, 0);
++}
++
++static void
++output_save(xf86OutputPtr output)
++{
++}
++
++static void
++output_restore(xf86OutputPtr output)
++{
++}
++
++static int
++output_mode_valid(xf86OutputPtr output, DisplayModePtr mode)
++{
++    return mga_valid_mode(output->scrn, mode, 0);
++}
++
++static Bool
++output_mode_fixup(xf86OutputPtr output, DisplayModePtr mode,
++                   DisplayModePtr adjusted_mode)
++{
++    return TRUE;
++}
++
++static void
++output_prepare(xf86OutputPtr output)
++{
++    output->funcs->dpms(output, DPMSModeOff);
++}
++
++static void
++output_mode_set(xf86OutputPtr output, DisplayModePtr mode,
++                DisplayModePtr adjusted_mode)
++{
++}
++
++static void
++output_commit(xf86OutputPtr output)
++{
++    output->funcs->dpms(output, DPMSModeOn);
++}
++
++static xf86OutputStatus
++output_detect(xf86OutputPtr output)
++{
++    MgaOutputDataPtr data = MGAOUTPUTDATAPTR(output);
++
++    /* lie lie lie */
++    return XF86OutputStatusConnected;
++
++    /* 0xa0 is DDC EEPROM address */
++    if (xf86I2CProbeAddress(data->ddc_bus, 0xa0))
++        return XF86OutputStatusConnected;
++    else
++        return XF86OutputStatusUnknown;
++}
++
++/* jesus christ i hate everything */
++static vbeInfoPtr vbe;
++
++static DisplayModePtr
++output_get_modes(xf86OutputPtr output)
++{
++    MgaOutputDataPtr data = MGAOUTPUTDATAPTR(output);
++    xf86MonPtr mon;
++
++#if 1
++    if (!vbe) {
++	xf86LoadSubModule(output->scrn, "vbe");
++	vbe = VBEInit(NULL, MGAPTR(output->scrn)->pEnt->index);
++    }
++
++    /* mon = xf86OutputGetEDID(output, data->ddc_bus); */
++    mon = vbeDoEDID(vbe, NULL);
++#else
++
++    extern xf86MonPtr MGAdoDDC(ScrnInfoPtr pScrn);
++    mon = MGAdoDDC(output->scrn);
++#endif
++
++    xf86OutputSetEDID(output, mon);
++
++    return xf86OutputGetEDIDModes(output);
++}
++
++static void
++output_destroy(xf86OutputPtr output)
++{
++    free(output->driver_private);
++}
++
++xf86OutputPtr
++MGAG200EOutputInit(ScrnInfoPtr scrn)
++{
++    MGAPtr pMga = MGAPTR(scrn);
++    xf86OutputPtr output;
++    MgaOutputDataPtr data;
++
++    data = xnfcalloc(sizeof(MgaOutputDataRec), 1);
++    if (!data)
++        return NULL;
++
++    output = xf86OutputCreate(scrn, &output_dac1_funcs, "VGA1");
++    if (!output) {
++        free(data);
++        return NULL;
++    }
++
++    output->driver_private = data;
++
++    data->ddc_bus = pMga->DDC_Bus1;
++
++    return output;
++}
+diff --git a/src/mga_halmod.c b/src/mga_halmod.c
+deleted file mode 100644
+index b562ba4..0000000
+--- a/src/mga_halmod.c
++++ /dev/null
+@@ -1,41 +0,0 @@
+-#ifdef HAVE_CONFIG_H
+-#include "config.h"
+-#endif
+-
+-#include "xf86Module.h"
+-
+-#ifdef XFree86LOADER
+-
+-#define HAL_MAJOR_VERSION 1
+-#define HAL_MINOR_VERSION 0
+-#define HAL_PATCHLEVEL 0
+-
+-static MODULESETUPPROTO(halSetup);
+-
+-static XF86ModuleVersionInfo halVersRec =
+-{
+-	"mga_hal",
+-	MODULEVENDORSTRING,
+-	MODINFOSTRING1,
+-	MODINFOSTRING2,
+-	XORG_VERSION_CURRENT,
+-	HAL_MAJOR_VERSION, HAL_MINOR_VERSION, HAL_PATCHLEVEL,
+-	ABI_CLASS_VIDEODRV,			/* This is a video driver */
+-	ABI_VIDEODRV_VERSION,
+-	MOD_CLASS_NONE,
+-	{0,0,0,0}
+-};
+-
+-/*
+- * This is the module init data.
+- * Its name has to be the driver name followed by ModuleData.
+- */
+-_X_EXPORT XF86ModuleData mga_halModuleData = { &halVersRec, halSetup, NULL };
+-
+-static pointer
+-halSetup(pointer module, pointer opts, int *errmaj, int *errmin)
+-{
+-	return (pointer)1;
+-}
+-
+-#endif /* XFree86LOADER */
+diff --git a/src/mga_merge.c b/src/mga_merge.c
+index 6d7b71e..49ef9ab 100644
+--- a/src/mga_merge.c
++++ b/src/mga_merge.c
+@@ -337,8 +337,6 @@ MGAPreInitMergedFB(ScrnInfoPtr pScrn1, int flags)
+     pMga->TexturedVideo = pMga1->TexturedVideo;
+     pMga->MergedFB = TRUE;
+ 
+-    pMga->Rotate = 0;
+-
+     switch (pMga->Chipset) {
+     case PCI_CHIP_MGA2064:
+     case PCI_CHIP_MGA2164:
+@@ -377,9 +375,6 @@ MGAPreInitMergedFB(ScrnInfoPtr pScrn1, int flags)
+ 
+     mga_read_and_process_bios( pScrn );
+ 
+-    /* HW bpp matches reported bpp */
+-    pMga->HwBpp = pMga1->HwBpp;
+-
+     /*
+      * Reset card if it isn't primary one
+      */
+@@ -778,11 +773,6 @@ MGAMergePointerMoved(SCRN_ARG_TYPE arg, int x, int y)
+         pScr2->frameX0 = f2.x0;
+         pScr2->frameY0 = f2.y0;
+ 
+-        /*Adjust Granularity */
+-        MGAAdjustGranularity(pScrn,&pMga->M1frameX0,&pMga->M1frameY0);
+-        MGAAdjustGranularity(pScrn,&pScr2->frameX0,&pScr2->frameY0);
+-        MGAAdjustGranularity(pScrn,&pScrn->frameX0,&pScrn->frameY0);
+-        
+         pMga->M1frameX1 = pMga->M1frameX0 + MDMPTR(pScrn)->Monitor1->HDisplay -1;
+         pMga->M1frameY1 = pMga->M1frameY0 + MDMPTR(pScrn)->Monitor1->VDisplay -1;
+         pScr2->frameX1 = pScr2->frameX0 + MDMPTR(pScrn)->Monitor2->HDisplay -1;
+@@ -854,11 +844,6 @@ MGAAdjustMergeFrames(ADJUST_FRAME_ARGS_DECL) {
+     pScrn1->frameX0 = x;
+     pScrn1->frameY0 = y;
+     
+-    /* check granularity */
+-    MGAAdjustGranularity(pScrn1,&pMga->M1frameX0,&pMga->M1frameY0);
+-    MGAAdjustGranularity(pScrn1,&pScrn2->frameX0,&pScrn2->frameY0);
+-    MGAAdjustGranularity(pScrn1,&pScrn1->frameX0,&pScrn1->frameY0);
+-    
+     /* complete shitty redundant info */
+     pMga->M1frameX1 = pMga->M1frameX0 + MDMPTR(pScrn1)->Monitor1->HDisplay -1;
+     pMga->M1frameY1 = pMga->M1frameY0 + MDMPTR(pScrn1)->Monitor1->VDisplay -1;
+diff --git a/src/mga_randr.h b/src/mga_randr.h
+new file mode 100644
+index 0000000..c3662c6
+--- /dev/null
++++ b/src/mga_randr.h
+@@ -0,0 +1,45 @@
++/*
++ * Copyright 2012 Red Hat, Inc.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software")
++ * to deal in the software without restriction, including without limitation
++ * on the rights to use, copy, modify, merge, publish, distribute, sub
++ * license, and/or sell copies of the Software, and to permit persons to whom
++ * them Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice (including the next
++ * paragraph) shall be included in all copies or substantial portions of the
++ * Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTIBILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER
++ * IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF OR IN
++ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ */
++
++#ifndef MGA_RANDR_H
++#define MGA_RANDR_H
++
++#include "config.h"
++#include "xf86.h"
++#include "xf86Crtc.h"
++#include "xf86RandR12.h"
++
++#define MGACRTCDATAPTR(p) ((MgaCrtcDataPtr) ((p)->driver_private))
++
++extern void MGAGRestorePalette(ScrnInfoPtr pScrn, unsigned char* pntr);
++extern void MGAGLoadPalette(ScrnInfoPtr, int, int*, LOCO*, VisualPtr);
++extern void MGAGSavePalette(ScrnInfoPtr pScrn, unsigned char* pntr);
++
++extern Bool MGAGCrtc1Init(ScrnInfoPtr scrn);
++extern xf86OutputPtr MGAG200EOutputInit(ScrnInfoPtr scrn);
++
++extern void MGAG200SEComputePLLParam(long lFo, int *M, int *N, int *P);
++extern void MGAG200EVComputePLLParam(long lFo, int *M, int *N, int *P);
++extern void MGAG200WBComputePLLParam(long lFo, int *M, int *N, int *P);
++extern void MGAG200EHComputePLLParam(long lFo, int *M, int *N, int *P);
++extern void MGAG200ERComputePLLParam(long lFo, int *M, int *N, int *P);
++#endif
+diff --git a/src/mga_shadow.c b/src/mga_shadow.c
+index a8d5cfb..d1c7788 100644
+--- a/src/mga_shadow.c
++++ b/src/mga_shadow.c
+@@ -15,8 +15,6 @@
+ #include "shadowfb.h"
+ #include "servermd.h"
+ 
+-
+-
+ void
+ MGARefreshArea(ScrnInfoPtr pScrn, int num, BoxPtr pbox)
+ {
+@@ -25,16 +23,29 @@ MGARefreshArea(ScrnInfoPtr pScrn, int num, BoxPtr pbox)
+     unsigned char *src, *dst;
+    
+     Bpp = pScrn->bitsPerPixel >> 3;
+-    FBPitch = BitmapBytePad(pScrn->displayWidth * pScrn->bitsPerPixel);
++    if (pMga->randr12)
++	FBPitch = BitmapBytePad(pScrn->virtualX * pScrn->bitsPerPixel);
++    else
++	FBPitch = BitmapBytePad(pScrn->displayWidth * pScrn->bitsPerPixel);
+ 
+     while(num--) {
++	/* clip the box to the screen */
++	pbox->x1 = max(pbox->x1, 0);
++	pbox->y1 = max(pbox->y1, 0);
++	pbox->x2 = min(pbox->x2, pScrn->pScreen->width - 1);
++	pbox->y2 = min(pbox->y2, pScrn->pScreen->height - 1);
++
+ 	width = (pbox->x2 - pbox->x1) * Bpp;
+ 	height = pbox->y2 - pbox->y1;
++
++	if (height < 1 || width < 1)
++	    continue;
++
+ 	src = pMga->ShadowPtr + (pbox->y1 * pMga->ShadowPitch) + 
+ 						(pbox->x1 * Bpp);
+ 	dst = pMga->FbStart + (pbox->y1 * FBPitch) + (pbox->x1 * Bpp);
+ 
+-	while(height--) {
++	while (height--) {
+ 	    memcpy(dst, src, width);
+ 	    dst += FBPitch;
+ 	    src += pMga->ShadowPitch;
+@@ -51,202 +62,8 @@ MGAPointerMoved(SCRN_ARG_TYPE arg, int x, int y)
+     MGAPtr pMga = MGAPTR(pScrn);
+     int newX, newY;
+ 
+-    if(pMga->Rotate == 1) {
+-	newX = pScrn->pScreen->height - y - 1;
+-	newY = x;
+-    } else {
+-	newX = y;
+-	newY = pScrn->pScreen->width - x - 1;
+-    }
++    newX = y;
++    newY = pScrn->pScreen->width - x - 1;
+ 
+     (*pMga->PointerMoved)(arg, newX, newY);
+ }
+-
+-void
+-MGARefreshArea8(ScrnInfoPtr pScrn, int num, BoxPtr pbox)
+-{
+-    MGAPtr pMga = MGAPTR(pScrn);
+-    int count, width, height, y1, y2, dstPitch, srcPitch;
+-    CARD8 *dstPtr, *srcPtr, *src;
+-    CARD32 *dst;
+-
+-    dstPitch = pScrn->displayWidth;
+-    srcPitch = -pMga->Rotate * pMga->ShadowPitch;
+-
+-    while(num--) {
+-	width = pbox->x2 - pbox->x1;
+-	y1 = pbox->y1 & ~3;
+-	y2 = (pbox->y2 + 3) & ~3;
+-	height = (y2 - y1) >> 2;  /* in dwords */
+-
+-	if(pMga->Rotate == 1) {
+-	    dstPtr = pMga->FbStart + 
+-			(pbox->x1 * dstPitch) + pScrn->virtualX - y2;
+-	    srcPtr = pMga->ShadowPtr + ((1 - y2) * srcPitch) + pbox->x1;
+-	} else {
+-	    dstPtr = pMga->FbStart + 
+-			((pScrn->virtualY - pbox->x2) * dstPitch) + y1;
+-	    srcPtr = pMga->ShadowPtr + (y1 * srcPitch) + pbox->x2 - 1;
+-	}
+-
+-	while(width--) {
+-	    src = srcPtr;
+-	    dst = (CARD32*)dstPtr;
+-	    count = height;
+-	    while(count--) {
+-		*(dst++) = src[0] | (src[srcPitch] << 8) | 
+-					(src[srcPitch * 2] << 16) | 
+-					(src[srcPitch * 3] << 24);
+-		src += srcPitch * 4;
+-	    }
+-	    srcPtr += pMga->Rotate;
+-	    dstPtr += dstPitch;
+-	}
+-
+-	pbox++;
+-    }
+-} 
+-
+-
+-void
+-MGARefreshArea16(ScrnInfoPtr pScrn, int num, BoxPtr pbox)
+-{
+-    MGAPtr pMga = MGAPTR(pScrn);
+-    int count, width, height, y1, y2, dstPitch, srcPitch;
+-    CARD16 *dstPtr, *srcPtr, *src;
+-    CARD32 *dst;
+-
+-    dstPitch = pScrn->displayWidth;
+-    srcPitch = -pMga->Rotate * pMga->ShadowPitch >> 1;
+-
+-    while(num--) {
+-	width = pbox->x2 - pbox->x1;
+-	y1 = pbox->y1 & ~1;
+-	y2 = (pbox->y2 + 1) & ~1;
+-	height = (y2 - y1) >> 1;  /* in dwords */
+-
+-	if(pMga->Rotate == 1) {
+-	    dstPtr = (CARD16*)pMga->FbStart + 
+-			(pbox->x1 * dstPitch) + pScrn->virtualX - y2;
+-	    srcPtr = (CARD16*)pMga->ShadowPtr + 
+-			((1 - y2) * srcPitch) + pbox->x1;
+-	} else {
+-	    dstPtr = (CARD16*)pMga->FbStart + 
+-			((pScrn->virtualY - pbox->x2) * dstPitch) + y1;
+-	    srcPtr = (CARD16*)pMga->ShadowPtr + 
+-			(y1 * srcPitch) + pbox->x2 - 1;
+-	}
+-
+-	while(width--) {
+-	    src = srcPtr;
+-	    dst = (CARD32*)dstPtr;
+-	    count = height;
+-	    while(count--) {
+-		*(dst++) = src[0] | (src[srcPitch] << 16);
+-		src += srcPitch * 2;
+-	    }
+-	    srcPtr += pMga->Rotate;
+-	    dstPtr += dstPitch;
+-	}
+-
+-	pbox++;
+-    }
+-}
+-
+-
+-/* this one could be faster */
+-void
+-MGARefreshArea24(ScrnInfoPtr pScrn, int num, BoxPtr pbox)
+-{
+-    MGAPtr pMga = MGAPTR(pScrn);
+-    int count, width, height, y1, y2, dstPitch, srcPitch;
+-    CARD8 *dstPtr, *srcPtr, *src;
+-    CARD32 *dst;
+-
+-    dstPitch = BitmapBytePad(pScrn->displayWidth * 24);
+-    srcPitch = -pMga->Rotate * pMga->ShadowPitch;
+-
+-    while(num--) {
+-        width = pbox->x2 - pbox->x1;
+-        y1 = pbox->y1 & ~3;
+-        y2 = (pbox->y2 + 3) & ~3;
+-        height = (y2 - y1) >> 2;  /* blocks of 3 dwords */
+-
+-	if(pMga->Rotate == 1) {
+-	    dstPtr = pMga->FbStart + 
+-			(pbox->x1 * dstPitch) + ((pScrn->virtualX - y2) * 3);
+-	    srcPtr = pMga->ShadowPtr + ((1 - y2) * srcPitch) + (pbox->x1 * 3);
+-	} else {
+-	    dstPtr = pMga->FbStart + 
+-			((pScrn->virtualY - pbox->x2) * dstPitch) + (y1 * 3);
+-	    srcPtr = pMga->ShadowPtr + (y1 * srcPitch) + (pbox->x2 * 3) - 3;
+-	}
+-
+-	while(width--) {
+-	    src = srcPtr;
+-	    dst = (CARD32*)dstPtr;
+-	    count = height;
+-	    while(count--) {
+-		dst[0] = src[0] | (src[1] << 8) | (src[2] << 16) |
+-				(src[srcPitch] << 24);		
+-		dst[1] = src[srcPitch + 1] | (src[srcPitch + 2] << 8) |
+-				(src[srcPitch * 2] << 16) |
+-				(src[(srcPitch * 2) + 1] << 24);		
+-		dst[2] = src[(srcPitch * 2) + 2] | (src[srcPitch * 3] << 8) |
+-				(src[(srcPitch * 3) + 1] << 16) |
+-				(src[(srcPitch * 3) + 2] << 24);	
+-		dst += 3;
+-		src += srcPitch * 4;
+-	    }
+-	    srcPtr += pMga->Rotate * 3;
+-	    dstPtr += dstPitch; 
+-	}
+-
+-	pbox++;
+-    }
+-}
+-
+-void
+-MGARefreshArea32(ScrnInfoPtr pScrn, int num, BoxPtr pbox)
+-{
+-    MGAPtr pMga = MGAPTR(pScrn);
+-    int count, width, height, dstPitch, srcPitch;
+-    CARD32 *dstPtr, *srcPtr, *src, *dst;
+-
+-    dstPitch = pScrn->displayWidth;
+-    srcPitch = -pMga->Rotate * pMga->ShadowPitch >> 2;
+-
+-    while(num--) {
+-	width = pbox->x2 - pbox->x1;
+-	height = pbox->y2 - pbox->y1;
+-
+-	if(pMga->Rotate == 1) {
+-	    dstPtr = (CARD32*)pMga->FbStart + 
+-			(pbox->x1 * dstPitch) + pScrn->virtualX - pbox->y2;
+-	    srcPtr = (CARD32*)pMga->ShadowPtr + 
+-			((1 - pbox->y2) * srcPitch) + pbox->x1;
+-	} else {
+-	    dstPtr = (CARD32*)pMga->FbStart + 
+-			((pScrn->virtualY - pbox->x2) * dstPitch) + pbox->y1;
+-	    srcPtr = (CARD32*)pMga->ShadowPtr + 
+-			(pbox->y1 * srcPitch) + pbox->x2 - 1;
+-	}
+-
+-	while(width--) {
+-	    src = srcPtr;
+-	    dst = dstPtr;
+-	    count = height;
+-	    while(count--) {
+-		*(dst++) = *src;
+-		src += srcPitch;
+-	    }
+-	    srcPtr += pMga->Rotate;
+-	    dstPtr += dstPitch;
+-	}
+-
+-	pbox++;
+-    }
+-}
+-
+-
+-

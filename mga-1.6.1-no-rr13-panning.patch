@@ -1,0 +1,19 @@
+diff -up xf86-video-mga-1.6.1/src/mga_driver.c.jx xf86-video-mga-1.6.1/src/mga_driver.c
+--- xf86-video-mga-1.6.1/src/mga_driver.c.jx	2012-10-01 13:22:03.000000000 -0400
++++ xf86-video-mga-1.6.1/src/mga_driver.c	2012-10-01 13:28:48.754970360 -0400
+@@ -3418,11 +3418,15 @@ MGAScreenInit(SCREEN_INIT_ARGS_DECL)
+     pScrn->fbOffset = pMga->YDstOrg * (pScrn->bitsPerPixel / 8);
+ 
+     if (pMga->randr12) {
++	rrScrPrivPtr rr;
+ 	pScreen->SaveScreen = xf86SaveScreen;
+ 	pMga->CloseScreen = pScreen->CloseScreen;
+ 	pScreen->CloseScreen = MGACloseScreen;
+ 
+ 	xf86CrtcScreenInit(pScreen);
++
++	rr = rrGetScrPriv(pScreen);
++	rr->rrGetPanning = rr->rrSetPanning = NULL;
+     }
+ 
+     MGAInitVideo(pScreen);

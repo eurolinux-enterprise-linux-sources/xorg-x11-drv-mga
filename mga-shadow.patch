@@ -1,0 +1,93 @@
+diff -up xf86-video-mga-1.6.3/src/mga_driver.c.jx xf86-video-mga-1.6.3/src/mga_driver.c
+--- xf86-video-mga-1.6.3/src/mga_driver.c.jx	2014-06-11 15:17:29.438318263 -0400
++++ xf86-video-mga-1.6.3/src/mga_driver.c	2014-06-11 15:18:24.661446180 -0400
+@@ -92,7 +92,7 @@
+ #endif
+ 
+ #include "xf86cmap.h"
+-#include "shadowfb.h"
++#include "shadow.h"
+ #include "fbdevhw.h"
+ 
+ #ifdef MGADRI
+@@ -2574,9 +2574,9 @@ MGAPreInit(ScrnInfoPtr pScrn, int flags)
+ 	}
+     }
+ 
+-    /* Load shadowfb if needed */
++    /* Load shadow if needed */
+     if (pMga->ShadowFB) {
+-	if (!xf86LoadSubModule(pScrn, "shadowfb")) {
++	if (!xf86LoadSubModule(pScrn, "shadow")) {
+ 	    MGAFreeRec(pScrn);
+ 	    return FALSE;
+ 	}
+@@ -3155,6 +3155,43 @@ MGACrtc2FillStrip(ScrnInfoPtr pScrn)
+     }
+ }
+ 
++static void *
++MGAWindowLinear(ScreenPtr pScreen, CARD32 row, CARD32 offset, int mode,
++		CARD32 *size, void *closure)
++{
++    ScrnInfoPtr pScrn = xf86ScreenToScrn(pScreen);
++    MGAPtr pMga = MGAPTR(pScrn);
++
++    if (!pScrn->vtSema)
++	return NULL;
++
++    *size = (pScrn->pScreen->width * pScrn->bitsPerPixel) / 8;
++    return ((CARD8 *)pMga->FbStart + row * *size + offset);
++}
++
++static void
++MGAUpdatePacked(ScreenPtr pScreen, shadowBufPtr pBuf)
++{
++    shadowUpdatePacked(pScreen, pBuf);
++}
++
++static Bool
++MGACreateScreenResources(ScreenPtr pScreen)
++{
++    PixmapPtr pPixmap;
++    MGAPtr pMga = MGAPTR(xf86ScreenToScrn(pScreen));
++    Bool ret;
++
++    pScreen->CreateScreenResources = pMga->CreateScreenResources;
++    ret = pScreen->CreateScreenResources(pScreen);
++    pScreen->CreateScreenResources = MGACreateScreenResources;
++
++    if (!ret)
++	return FALSE;
++
++    return shadowAdd(pScreen, pScreen->GetScreenPixmap(pScreen),
++		     MGAUpdatePacked, MGAWindowLinear, 0, NULL);
++}
+ 
+ /* Mandatory */
+ 
+@@ -3494,9 +3531,11 @@ MGAScreenInit(SCREEN_INIT_ARGS_DECL)
+ 	return FALSE;
+ 
+     if(pMga->ShadowFB) {
+-	RefreshAreaFuncPtr refreshArea = MGARefreshArea;
++	if (!shadowSetup(pScreen))
++	    return FALSE;
+ 
+-	ShadowFBInit(pScreen, refreshArea);
++	pMga->CreateScreenResources = pScreen->CreateScreenResources;
++	pScreen->CreateScreenResources = MGACreateScreenResources;
+     }
+ 
+     if (pMga->randr12)
+diff -up xf86-video-mga-1.6.3/src/mga.h.jx xf86-video-mga-1.6.3/src/mga.h
+--- xf86-video-mga-1.6.3/src/mga.h.jx	2014-06-11 15:17:29.441318271 -0400
++++ xf86-video-mga-1.6.3/src/mga.h	2014-06-11 15:18:52.525505215 -0400
+@@ -567,6 +567,7 @@ typedef struct {
+     void		(*PointerMoved)(SCRN_ARG_TYPE arg, int x, int y);
+     CloseScreenProcPtr	CloseScreen;
+     ScreenBlockHandlerProcPtr BlockHandler;
++    CreateScreenResourcesProcPtr CreateScreenResources;
+     Bool		(*i2cInit)(ScrnInfoPtr);
+     I2CBusPtr		DDC_Bus1;
+     I2CBusPtr		DDC_Bus2;
