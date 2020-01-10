@@ -1,0 +1,101 @@
+--- xf86-video-mga-1.6.3/src/mga_g_output.c.ddc	2015-03-13 06:06:57.481222735 -0400
++++ xf86-video-mga-1.6.3/src/mga_g_output.c	2015-03-13 06:07:46.759222680 -0400
+@@ -219,24 +219,85 @@ static vbeInfoPtr vbe;
+ static DisplayModePtr
+ output_get_modes(xf86OutputPtr output)
+ {
+-    MgaOutputDataPtr data = MGAOUTPUTDATAPTR(output);
+-    xf86MonPtr mon;
++    vgaHWPtr hwp;
++    MGAPtr pMga;
++    ScrnInfoPtr pScrn;
++    const char *from = NULL;
++    xf86MonPtr MonInfo = NULL;
++
++    pScrn = output->scrn;
++    hwp = VGAHWPTR(pScrn);
++    pMga = MGAPTR(pScrn);
++
++    /* Load DDC if we have the code to use it */
++    if (pMga->i2cInit) {
++	if (!xf86LoadSubModule(pScrn, "ddc")) {
++	    /* ddc module not found, we can do without it */
++	    pMga->DDC_Bus1 = NULL;
++	    pMga->DDC_Bus2 = NULL;
++	    return NULL;
++	}
++    } else 
++	return NULL;
++
++    /* - DDC can use I2C bus */
++    /* Load I2C if we have the code to use it */
++    if (pMga->i2cInit) {
++	if (!xf86LoadSubModule(pScrn, "i2c")) {
++	    /* i2c module not found, we can do without it */
++	    pMga->i2cInit = NULL;
++	    pMga->DDC_Bus1 = NULL;
++	    pMga->DDC_Bus2 = NULL;
++	}
++    }
++
++    /* Initialise the MMIO vgahw functions */
++    vgaHWSetMmioFuncs(hwp, pMga->IOBase, PORT_OFFSET);
++    vgaHWGetIOBase(hwp);
++
++    /* It is now safe to talk to the card */
++    /* Allow access to DDC */
++    if (pMga->is_G200ER) {
++        CARD8 ucData = inMGAdac(MGA1064_GEN_IO_CTL2);
++        outMGAdac(MGA1064_GEN_IO_CTL2, ucData | 1);        
++    }
+ 
+-#if 1
+-    if (!vbe) {
+-	xf86LoadSubModule(output->scrn, "vbe");
+-	vbe = VBEInit(NULL, MGAPTR(output->scrn)->pEnt->index);
++    /* DDC for second head... */
++    if (pMga->SecondCrtc && pMga->DDC_Bus2) {
++	MonInfo = xf86DoEDID_DDC2(XF86_SCRN_ARG(pScrn), pMga->DDC_Bus2);
++	from = "I2C";
++    } else {
++	/* Its the first head... */ 
++	if (pMga->DDC_Bus1) {
++	    MonInfo = xf86DoEDID_DDC2(XF86_SCRN_ARG(pScrn), pMga->DDC_Bus1);
++	    from = "I2C";
++	}
++	if (!MonInfo){
++	    vbeInfoPtr pVbe;
++	    if (xf86LoadSubModule(pScrn, "vbe")) {
++		pVbe = VBEInit(NULL, pMga->pEnt->index);
++		MonInfo = vbeDoEDID(pVbe, NULL);
++		vbeFree(pVbe);
++		from = "VBE";
++	    }
++	}
+     }
+ 
+-    /* mon = xf86OutputGetEDID(output, data->ddc_bus); */
+-    mon = vbeDoEDID(vbe, NULL);
+-#else
++    if (MonInfo) {
++	xf86DrvMsg(pScrn->scrnIndex, X_INFO, "%s monitor info\n", from);
++	xf86PrintEDID(MonInfo);
++	xf86DrvMsg(pScrn->scrnIndex, X_INFO, "end of monitor info\n");
++    }
++
++    /* Remove access to DDC */
++    if (pMga->is_G200ER) {
++        CARD8 ucData = inMGAdac(MGA1064_GEN_IO_CTL2);
++        outMGAdac(MGA1064_GEN_IO_CTL2, ucData & ~1);        
++    }
+ 
+-    extern xf86MonPtr MGAdoDDC(ScrnInfoPtr pScrn);
+-    mon = MGAdoDDC(output->scrn);
+-#endif
++    xf86SetDDCproperties(pScrn, MonInfo);
+ 
+-    xf86OutputSetEDID(output, mon);
++    xf86OutputSetEDID(output, MonInfo);
+ 
+     return xf86OutputGetEDIDModes(output);
+ }

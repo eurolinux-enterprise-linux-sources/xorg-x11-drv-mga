@@ -7,7 +7,7 @@
 Summary:   Xorg X11 mga video driver
 Name:      xorg-x11-drv-mga
 Version:   1.6.3
-Release:   9%{?dist}
+Release:   11%{?dist}
 URL:       http://www.x.org
 License: MIT
 Group:     User Interface/X Hardware Support
@@ -29,7 +29,8 @@ Patch8: 0001-dri-Stop-uselessly-initializing-the-ValidateTree-hoo.patch
 Patch9: 0001-Enable-write-combining-on-the-framebuffer-BAR.patch
 Patch10: mga-1.6.3-g200ew3.patch
 Patch11: mga-1.6.3-g200e4.patch
-
+Patch12: mga-1.6.3-ddc-randr12.patch
+Patch13: mga-1.6.3-g200eh3.patch
 ExcludeArch: s390 s390x
 
 BuildRequires: autoconf automake libtool
@@ -55,6 +56,8 @@ X.Org X11 mga video driver.
 %patch9 -p1 -b .wc
 %patch10 -p1 -b .g200ew3
 %patch11 -p1 -b .g200e4
+%patch12 -p1 -b .fallddc
+%patch13 -p1 -b .g200eh3
 
 %build
 autoreconf -f -v --install || exit 1
@@ -81,6 +84,12 @@ rm -rf $RPM_BUILD_ROOT
 %{_mandir}/man4/mga.4*
 
 %changelog
+* Thu Feb 02 2017 Adam Jackson <ajax@redhat.com> - 1.6.3-11
+- Add support for G200EH3
+
+* Fri Oct 14 2016 Dave Airlie <airlied@redhat.com> - 1.6.3-10
+- attempt to fallback to DDC for UEFI
+
 * Wed Jan 20 2016 Adam Jackson <ajax@redhat.com> 1.6.3-9
 - Add support for G200EW3 and G200E4
 
